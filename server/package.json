@@ -1,0 +1,20 @@
+{
+  "name": "notebit-server",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/static": "^8.0.4",
+    "@fastify/websocket": "^11.2.0",
+    "better-sqlite3": "^11.8.1",
+    "fastify": "^5.2.1",
+    "lib0": "^0.2.117",
+    "y-protocols": "^1.0.7",
+    "y-websocket": "^1.5.4",
+    "yjs": "^13.6.31"
+  }
+}

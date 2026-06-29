@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+**/node_modules/
+
+# data (never commit a user's database)
+server/data/
+*.db
+*.db-shm
+*.db-wal
+
+# build output
+web/dist/
+
+# secrets / env
+.env
+.env.*
+!.env.example
+
+# misc
+*.log
+.DS_Store
