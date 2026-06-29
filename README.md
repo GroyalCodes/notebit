@@ -27,7 +27,7 @@ Pages, real-time collaboration, Kanban boards, a knowledge graph, per-page permi
 You need [Docker](https://docs.docker.com/get-docker/). Then:
 
 ```bash
-git clone https://github.com/notebit/notebit.git
+git clone https://github.com/GroyalCodes/notebit.git
 cd notebit
 docker compose up -d
 ```
@@ -56,7 +56,18 @@ git pull
 docker compose up -d --build
 ```
 
-You can see the version you're running on the sign-in screen and at `GET /api/version`. Releases are tagged [here](https://github.com/notebit/notebit/releases) — `main` is always the latest stable.
+You can see the version you're running on the sign-in screen and at `GET /api/version`. Releases are tagged [here](https://github.com/GroyalCodes/notebit/releases) — `main` is always the latest stable.
+
+### Deploy to Fly.io
+
+NoteBit ships with a `fly.toml`. With [flyctl](https://fly.io/docs/flyctl/install/) installed:
+
+```bash
+fly launch --copy-config --no-deploy   # creates your app + a volume for /data
+fly deploy
+```
+
+Your SQLite database persists on the Fly volume, separate from the image, so deploys keep your data. Schema migrations run automatically on boot.
 
 ## Run without Docker (development)
 
