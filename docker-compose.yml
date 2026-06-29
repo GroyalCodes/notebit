@@ -1,0 +1,22 @@
+# NoteBit — self-host with one command:  docker compose up -d
+# Then open http://localhost:8200 and create your account.
+services:
+  notebit:
+    build: .
+    # Once images are published you can swap the line above for:
+    # image: ghcr.io/notebit/notebit:latest
+    container_name: notebit
+    ports:
+      - "8200:8200"
+    volumes:
+      - notebit-data:/data
+    environment:
+      # Public URL people use to reach this instance (used in invite emails)
+      APP_URL: "http://localhost:8200"
+      # Optional — email invites via Resend (https://resend.com). Leave unset to disable.
+      # RESEND_API_KEY: "re_xxx"
+      # MAIL_FROM: "NoteBit <you@yourdomain.com>"
+    restart: unless-stopped
+
+volumes:
+  notebit-data:
