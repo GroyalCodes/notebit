@@ -8,7 +8,7 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import JSZip from 'jszip';
 import api from './api.js';
-import { BookOpen, MagnifyingGlass as SearchIcon, Plus, Trash as Trash2, Gear as SettingsIcon, User, Users, Globe, Tag as TagIcon, X, CaretDown as ChevronDown, CaretRight as ChevronRight, PencilSimple as Pencil, Eye, ShareNetwork as Share2, DotsSixVertical as GripVertical, List as Menu, NotePencil, Crown, Lock, LockOpen, DotsThree, LinkSimple } from '@phosphor-icons/react';
+import { BookOpen, MagnifyingGlass as SearchIcon, Plus, Trash as Trash2, Gear as SettingsIcon, User, Users, Globe, Tag as TagIcon, X, CaretDown as ChevronDown, CaretRight as ChevronRight, PencilSimple as Pencil, Eye, ShareNetwork as Share2, DotsSixVertical as GripVertical, List as Menu, NotePencil, Crown, Lock, LockOpen, DotsThree, LinkSimple, Bell, ChatCircle } from '@phosphor-icons/react';
 const ROLE_INFO = { read: { label: 'Read', icon: Eye }, write: { label: 'Write', icon: Pencil }, manage: { label: 'Manage', icon: Crown } };
 import EmojiPicker from 'emoji-picker-react';
 import * as Phosphor from '@phosphor-icons/react';
@@ -292,7 +292,7 @@ function Login({ onAuth, ws }) {
         <button className="btn-gold" disabled={busy}>{busy ? '…' : mode === 'login' ? 'Sign in' : first ? 'Create admin' : 'Sign up'}</button>
         {!first && cfg.allowSignup && <div className="switch" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setErr(''); }}>
           {mode === 'login' ? 'Need an account? Sign up' : 'Have an account? Sign in'}</div>}
-        <div className="login-ver">NoteBit v{APP_VERSION} · <a href="https://github.com/notebit/notebit" target="_blank" rel="noreferrer">open source</a></div>
+        <div className="login-ver">NoteBit v{APP_VERSION} · <a href="https://github.com/GroyalCodes/notebit" target="_blank" rel="noreferrer">open source</a></div>
       </form>
     </div>
   );
@@ -628,6 +628,19 @@ function Settings({ me, setMe, currentWs, onWsChange, onLogout, onImported, onCl
     </div>
   );
 }
+function UpdateNotice() {
+  const [u, setU] = useState(null);
+  useEffect(() => { api('/update-check').then(setU).catch(() => setU({ current: APP_VERSION })); }, []);
+  if (!u) return null;
+  return (
+    <div className="upd">
+      <span>NoteBit <b>v{u.current}</b></span>
+      {u.updateAvailable
+        ? <a className="upd-new" href={u.url} target="_blank" rel="noreferrer">Update to v{u.latest} →</a>
+        : <span className="muted small">You're up to date</span>}
+    </div>
+  );
+}
 function Account({ me, setMe, onLogout }) {
   const [name, setName] = useState(me.name || '');
   const [pw, setPw] = useState({ current_password: '', new_password: '' }); const [msg, setMsg] = useState('');
@@ -658,6 +671,8 @@ function Account({ me, setMe, onLogout }) {
       <input type="password" placeholder="New password (min 6)" value={pw.new_password} onChange={e => setPw({ ...pw, new_password: e.target.value })} />
       <button className="mini gold" onClick={changePw}>Update password</button>
       {msg && <div className="muted small">{msg}</div>}
+      <h3>About</h3>
+      <UpdateNotice />
       <button className="btn-soft logout-btn" onClick={onLogout}>Log out</button>
     </div>
   );
@@ -1101,6 +1116,77 @@ function PageMenu({ page, canManage, onLock, onDelete }) {
     </Popover>
   );
 }
+function fmtWhen(s) { try { const d = new Date(String(s).replace(' ', 'T') + 'Z'); const sec = (Date.now() - d) / 1000; if (sec < 60) return 'just now'; if (sec < 3600) return Math.floor(sec / 60) + 'm ago'; if (sec < 86400) return Math.floor(sec / 3600) + 'h ago'; if (sec < 604800) return Math.floor(sec / 86400) + 'd ago'; return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); } catch { return ''; } }
+function escHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function renderMentions(body) { return escHtml(body).replace(/(^|\s)@(\w+)/g, '$1<span class="mention">@$2</span>'); }
+function Comments({ pageId, members, me }) {
+  const [list, setList] = useState([]);
+  const [text, setText] = useState('');
+  const [mentions, setMentions] = useState([]);
+  const [mq, setMq] = useState(null);
+  const ta = useRef();
+  const load = () => api('/pages/' + pageId + '/comments').then(setList).catch(() => setList([]));
+  useEffect(() => { setText(''); setMentions([]); load(); }, [pageId]);
+  const onChange = (e) => { setText(e.target.value); const m = e.target.value.slice(0, e.target.selectionStart).match(/@(\w*)$/); setMq(m ? m[1].toLowerCase() : null); };
+  const pick = (mem) => { const nm = (mem.name || mem.email).split(' ')[0]; const caret = ta.current.selectionStart; const before = text.slice(0, caret).replace(/@(\w*)$/, '@' + nm + ' '); setText(before + text.slice(caret)); setMentions(ms => ms.find(x => x.id === mem.id) ? ms : [...ms, { id: mem.id, name: nm }]); setMq(null); setTimeout(() => ta.current?.focus(), 0); };
+  const post = async () => { const body = text.trim(); if (!body) return; const ids = mentions.filter(m => body.includes('@' + m.name)).map(m => m.id); try { await api('/pages/' + pageId + '/comments', { method: 'POST', body: { body, mentions: ids } }); } catch {} setText(''); setMentions([]); load(); };
+  const matches = mq != null ? members.filter(m => m.id !== me.id && (m.name || m.email).toLowerCase().includes(mq)).slice(0, 6) : [];
+  return (
+    <div className="comments">
+      <div className="cm-head"><ChatCircle size={16} weight="fill" /> Comments{list.length ? <span className="muted small"> {list.length}</span> : null}</div>
+      {list.map(c => (
+        <div className="cm" key={c.id}>
+          <Avatar user={c.author} size={28} />
+          <div className="cm-main">
+            <div className="cm-meta"><b>{c.author.name}</b> <span className="muted small">{fmtWhen(c.created_at)}</span>{c.mine && <button className="cm-del" title="Delete" onClick={() => api('/comments/' + c.id, { method: 'DELETE' }).then(load)}><X size={11} /></button>}</div>
+            <div className="cm-text" dangerouslySetInnerHTML={{ __html: renderMentions(c.body) }} />
+          </div>
+        </div>
+      ))}
+      <div className="cm-compose">
+        <Avatar user={me} size={28} />
+        <div className="cm-input">
+          <textarea ref={ta} value={text} placeholder="Add a comment…  @ to mention" rows={1} onChange={onChange}
+            onInput={e => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
+            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); post(); } }} />
+          {matches.length > 0 && <div className="cm-ment">{matches.map(m => <div className="cm-mopt" key={m.id} onMouseDown={e => { e.preventDefault(); pick(m); }}><Avatar user={m} size={20} /> {m.name || m.email}</div>)}</div>}
+          {text.trim() && <div className="cm-act"><span className="muted small">⌘↵ to send</span><button className="btn-soft" onClick={post}>Comment</button></div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+function Inbox({ onOpen }) {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState({ unread: 0, items: [] });
+  const load = () => api('/inbox').then(setData).catch(() => {});
+  useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, []);
+  const clickItem = (n) => { api('/inbox/read', { method: 'POST', body: { id: n.id } }).then(load).catch(() => {}); setOpen(false); if (n.page_id) onOpen(n.page_id); };
+  return (
+    <span className="inbox-wrap">
+      <button className="icon-btn" onClick={() => { setOpen(v => !v); if (!open) load(); }} title="Inbox"><Bell size={18} />{data.unread > 0 && <span className="inbox-badge">{data.unread > 9 ? '9+' : data.unread}</span>}</button>
+      {open && <>
+        <div className="picker-overlay" onClick={() => setOpen(false)} />
+        <div className="inbox-pop">
+          <div className="inbox-head"><span>Inbox</span>{data.unread > 0 && <span className="inbox-mark" onClick={() => api('/inbox/read', { method: 'POST', body: {} }).then(load)}>Mark all read</span>}</div>
+          <div className="inbox-list">
+            {data.items.length === 0 && <div className="inbox-empty muted small">No notifications yet. Mentions and comments land here.</div>}
+            {data.items.map(n => (
+              <div className={'inbox-item' + (n.read ? '' : ' unread')} key={n.id} onClick={() => clickItem(n)}>
+                <Avatar user={n.actor} size={26} />
+                <div className="ib-main">
+                  <div className="ib-line"><b>{n.actor.name}</b> {n.type === 'mention' ? 'mentioned you' : 'commented'}{n.page ? <> on <PageIcon icon={n.page.icon} size={12} /> {n.page.title || 'Untitled'}</> : null}</div>
+                  {n.body && <div className="ib-snip muted small">{n.body}</div>}
+                  <div className="muted" style={{ fontSize: 11 }}>{fmtWhen(n.created_at)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </>}
+    </span>
+  );
+}
 // ---------- workspace ----------
 function Workspace({ me, setMe, onLogout }) {
   const confirm = useConfirm();
@@ -1243,6 +1329,7 @@ function Workspace({ me, setMe, onLogout }) {
               </span>
             </div>
             <span className="row" style={{ gap: 2 }}>
+              <Inbox onOpen={setCurrentId} />
               <button className="icon-btn" onClick={() => setSearching(true)} title="Search (⌘K)"><SearchIcon size={18} /></button>
               <button className="icon-btn" onClick={() => setSidebar(false)} title="Collapse sidebar"><Menu size={18} /></button>
             </span>
@@ -1328,6 +1415,7 @@ function Workspace({ me, setMe, onLogout }) {
                   {backlinks.map(b => <div className="bl" key={b.id} onClick={() => setCurrentId(b.id)}><PageIcon icon={b.icon} size={14} /><span>{b.title || 'Untitled'}</span></div>)}
                 </div>}
                 </>}
+                <Comments pageId={page.id} members={wsMembers} me={me} />
             </div>
           </>
         )}
