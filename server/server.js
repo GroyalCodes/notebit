@@ -59,6 +59,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, name TEXT N
 db.exec('CREATE TABLE IF NOT EXISTS ydocs (page_id TEXT PRIMARY KEY, data BLOB)');
 db.exec("CREATE TABLE IF NOT EXISTS workspace_member (workspace_id TEXT NOT NULL, user_id INTEGER NOT NULL, role TEXT NOT NULL DEFAULT 'write', PRIMARY KEY (workspace_id, user_id))");
 db.exec("CREATE TABLE IF NOT EXISTS templates (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, icon TEXT, content TEXT, created_at TEXT DEFAULT (datetime('now')))");
+db.exec("CREATE TABLE IF NOT EXISTS comments (id TEXT PRIMARY KEY, page_id TEXT NOT NULL, user_id INTEGER NOT NULL, body TEXT, mentions TEXT DEFAULT '[]', created_at TEXT DEFAULT (datetime('now')))");
+db.exec("CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, actor_id INTEGER, type TEXT, page_id TEXT, comment_id TEXT, body TEXT, read INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')))");
+db.exec("CREATE INDEX IF NOT EXISTS idx_comments_page ON comments(page_id)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, read)");
 const persistYDoc = (name, ydoc) => { try { const u = Y.encodeStateAsUpdate(ydoc); db.prepare('INSERT INTO ydocs (page_id,data) VALUES (?,?) ON CONFLICT(page_id) DO UPDATE SET data=excluded.data').run(name, Buffer.from(u)); } catch {} };
 const collabDocs = new Map(); // room -> { ydoc, awareness, conns: Map<ws, Set<clientID>>, saveTimer }
 function getCollabDoc(room) {
@@ -374,7 +378,61 @@ app.post('/api/auth/login', async (req, reply) => {
 });
 app.post('/api/auth/logout', async (req, reply) => { if (req.cookies?.sid) db.prepare('DELETE FROM sessions WHERE token=?').run(req.cookies.sid); reply.clearCookie('sid', { path: '/' }); return { ok: true }; });
 app.get('/api/version', async () => ({ name: 'NoteBit', version: VERSION }));
+let _upd = { at: 0, data: null };
+app.get('/api/update-check', async () => {
+  if (_upd.data && Date.now() - _upd.at < 3600000) return _upd.data;
+  let latest = null, url = 'https://github.com/GroyalCodes/notebit/releases';
+  try { const r = await fetch('https://api.github.com/repos/GroyalCodes/notebit/releases/latest', { headers: { 'User-Agent': 'notebit', Accept: 'application/vnd.github+json' } }); if (r.ok) { const j = await r.json(); latest = String(j.tag_name || '').replace(/^v/, '') || null; url = j.html_url || url; } } catch {}
+  _upd = { at: Date.now(), data: { current: VERSION, latest, updateAvailable: !!latest && latest !== VERSION, url } };
+  return _upd.data;
+});
 app.get('/api/me', async (req, reply) => { const u = userFromReq(req); if (!u) return reply.code(401).send({ error: 'unauthorized' }); return u; });
+
+// ---------- comments + inbox ----------
+const userPub = (id) => { const r = db.prepare('SELECT id,name,email,avatar FROM users WHERE id=?').get(id); return r ? { id: r.id, name: r.name || r.email, avatar: r.avatar } : { id, name: 'Someone' }; };
+app.get('/api/pages/:id/comments', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  if (!access(u, req.params.id).view) return reply.code(403).send({ error: 'no access' });
+  return db.prepare('SELECT * FROM comments WHERE page_id=? ORDER BY created_at').all(req.params.id)
+    .map(c => ({ id: c.id, body: c.body, created_at: c.created_at, author: userPub(c.user_id), mine: c.user_id === u.id }));
+});
+app.post('/api/pages/:id/comments', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  const pageId = req.params.id;
+  if (!access(u, pageId).view) return reply.code(403).send({ error: 'no access' });
+  const body = (req.body?.body || '').trim(); const mentions = req.body?.mentions || [];
+  if (!body) return reply.code(400).send({ error: 'empty' });
+  const id = crypto.randomUUID();
+  db.prepare('INSERT INTO comments (id,page_id,user_id,body,mentions) VALUES (?,?,?,?,?)').run(id, pageId, u.id, body, JSON.stringify(mentions));
+  const page = db.prepare('SELECT title,owner_id FROM pages WHERE id=?').get(pageId);
+  const sent = new Set([u.id]);
+  const notify = (uid, type) => { uid = Number(uid); if (!uid || sent.has(uid)) return; sent.add(uid); db.prepare('INSERT INTO notifications (id,user_id,actor_id,type,page_id,comment_id,body) VALUES (?,?,?,?,?,?,?)').run(crypto.randomUUID(), uid, u.id, type, pageId, id, body.slice(0, 160)); };
+  for (const m of mentions) notify(m, 'mention');
+  if (page) notify(page.owner_id, 'comment');
+  return { ok: true, id };
+});
+app.delete('/api/comments/:id', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  const c = db.prepare('SELECT * FROM comments WHERE id=?').get(req.params.id);
+  if (!c) return reply.code(404).send({ error: 'not found' });
+  if (c.user_id !== u.id && !u.is_admin) return reply.code(403).send({ error: 'not yours' });
+  db.prepare('DELETE FROM comments WHERE id=?').run(req.params.id);
+  return { ok: true };
+});
+app.get('/api/inbox', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  const items = db.prepare('SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 40').all(u.id).map(n => {
+    const pg = db.prepare('SELECT title,icon FROM pages WHERE id=? AND deleted_at IS NULL').get(n.page_id);
+    return { id: n.id, type: n.type, read: n.read, created_at: n.created_at, body: n.body, page_id: n.page_id, page: pg ? { title: pg.title, icon: pg.icon } : null, actor: userPub(n.actor_id) };
+  });
+  return { unread: db.prepare('SELECT count(*) c FROM notifications WHERE user_id=? AND read=0').get(u.id).c, items };
+});
+app.post('/api/inbox/read', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  if (req.body?.id) db.prepare('UPDATE notifications SET read=1 WHERE id=? AND user_id=?').run(req.body.id, u.id);
+  else db.prepare('UPDATE notifications SET read=1 WHERE user_id=?').run(u.id);
+  return { ok: true };
+});
 app.get('/api/users', async (req, reply) => { if (!requireUser(req, reply)) return; return db.prepare('SELECT id,email,name,is_admin,avatar,theme FROM users ORDER BY name').all(); });
 
 // ---- profile / account ----

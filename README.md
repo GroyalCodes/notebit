@@ -69,12 +69,13 @@ All optional except where noted — set via environment in `docker-compose.yml` 
 
 ### Updating
 
+One command, and **your data is kept** — it lives in the Docker volume (`notebit-data`), separate from the app image, and schema migrations run automatically on startup:
+
 ```bash
-git pull
-docker compose up -d --build
+./update.sh
 ```
 
-You can see the version you're running on the sign-in screen and at `GET /api/version`. Releases are tagged [here](https://github.com/GroyalCodes/notebit/releases); `main` is always the latest stable.
+(That's just `git pull && docker compose up -d --build`.) NoteBit shows an **"update available"** notice in **Settings → Account → About** when a newer release is out, and you can always check the running version at `GET /api/version`. Releases are tagged [here](https://github.com/GroyalCodes/notebit/releases); `main` is always the latest stable.
 
 ### Deploy to Fly.io
 

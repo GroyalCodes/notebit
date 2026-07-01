@@ -215,6 +215,47 @@ kbd { margin-left: auto; background: var(--bg); border: 1px solid var(--line2); 
 .segmented button:hover { border-color: var(--line2); color: var(--text); }
 .segmented button.on { border-color: var(--accent-dim); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .tag-sw { border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+/* comments */
+.comments { max-width: var(--content-w, 720px); margin: 42px auto 64px; padding: 0 4px; }
+.cm-head { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-dim); margin-bottom: 18px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.cm-head svg { color: var(--accent); }
+.cm { display: flex; gap: 11px; margin-bottom: 18px; }
+.cm-main { flex: 1; min-width: 0; }
+.cm-meta { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.cm-meta b { color: var(--text); font-weight: 600; }
+.cm-del { background: none; border: none; color: var(--muted); cursor: pointer; margin-left: 2px; opacity: 0; display: flex; padding: 2px; border-radius: 5px; }
+.cm:hover .cm-del { opacity: .55; } .cm-del:hover { opacity: 1; color: #e0726a; }
+.cm-text { font-size: 14.5px; color: var(--text-dim); line-height: 1.55; margin-top: 3px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mention { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); border-radius: 5px; padding: 0 4px; font-weight: 600; }
+.cm-compose { display: flex; gap: 11px; margin-top: 22px; }
+.cm-input { flex: 1; position: relative; }
+.cm-input textarea { width: 100%; background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14.5px; color: var(--text); font-family: inherit; resize: none; line-height: 1.5; }
+.cm-input textarea:focus { outline: none; border-color: var(--accent-dim); }
+.cm-ment { position: absolute; bottom: calc(100% + 4px); left: 0; background: var(--panel2); border: 1px solid var(--line2); border-radius: 9px; padding: 5px; box-shadow: 0 12px 30px rgba(0,0,0,.45); z-index: 20; min-width: 200px; }
+.cm-mopt { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; font-size: 13.5px; color: var(--text-dim); cursor: pointer; }
+.cm-mopt:hover { background: var(--hover); color: var(--text); }
+.cm-act { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 8px; }
+/* inbox */
+.inbox-wrap { position: relative; display: inline-flex; }
+.inbox-wrap .icon-btn { position: relative; }
+.inbox-badge { position: absolute; top: -2px; right: -2px; min-width: 15px; height: 15px; padding: 0 3px; background: #e0726a; color: #fff; font-size: 9.5px; font-weight: 700; border-radius: 999px; display: flex; align-items: center; justify-content: center; border: 2px solid var(--panel); }
+.inbox-pop { position: absolute; top: calc(100% + 7px); left: 0; z-index: 3000; width: 330px; max-width: 86vw; background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 16px 44px rgba(0,0,0,.5); overflow: hidden; }
+.inbox-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--line); font-weight: 600; font-size: 14px; }
+.inbox-mark { font-size: 12px; color: var(--accent); cursor: pointer; font-weight: 500; }
+.inbox-list { max-height: 400px; overflow-y: auto; }
+.inbox-empty { padding: 26px 16px; text-align: center; }
+.inbox-item { display: flex; gap: 10px; padding: 11px 14px; cursor: pointer; border-bottom: 1px solid var(--line); }
+.inbox-item:last-child { border-bottom: none; }
+.inbox-item:hover { background: var(--hover); }
+.inbox-item.unread { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.ib-main { flex: 1; min-width: 0; }
+.ib-line { font-size: 13px; color: var(--text-dim); line-height: 1.4; }
+.ib-line b { color: var(--text); }
+.ib-snip { margin: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upd { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--bg2); border: 1px solid var(--line); border-radius: 9px; padding: 11px 13px; font-size: 13.5px; margin-top: 4px; }
+.upd b { color: var(--text); }
+.upd-new { color: var(--accent); font-weight: 600; text-decoration: none; }
+.upd-new:hover { text-decoration: underline; }
 .bcard.locked { opacity: .72; cursor: default; }
 .bcard.locked:hover { background: var(--panel); border-color: var(--line); }
 .bcard-lock { margin-left: auto; flex: none; color: var(--muted); margin-top: 1px; }
