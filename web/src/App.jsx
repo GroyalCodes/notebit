@@ -39,7 +39,7 @@ function Logo({ size = 32 }) {
   );
 }
 const treeSig = (list) => (list || []).map(p => `${p.id}:${p.title}:${p.parent_id}:${p.position}:${p.icon}:${p.is_public}:${p.status}:${p.view}:${p.locked}:${p.list_cards}`).join('|');
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 function PageIcon({ icon, size = 18 }) {
   if (icon && icon.startsWith('dot:')) { const c = icon.slice(4); return <span style={{ width: Math.round(size * 0.62), height: Math.round(size * 0.62), borderRadius: '50%', background: BOARD_COLORS[c] || c || 'var(--muted)', display: 'inline-block', flex: 'none' }} />; }
   if (icon && icon.startsWith('ph:')) { const p = icon.split(':'); const I = PH[p[1]]; if (I) return <I size={size} weight="fill" color={p[2] || undefined} />; }
@@ -1198,6 +1198,18 @@ function Workspace({ me, setMe, onLogout }) {
   const [wsModal, setWsModal] = useState(false);
   const [users, setUsers] = useState([]);
   const [currentId, setCurrentId] = useState(null);
+  const popRef = useRef(false);
+  useEffect(() => {
+    history.replaceState({ pageId: currentId }, '');
+    const onPop = (e) => { popRef.current = true; setCurrentId(e.state?.pageId ?? null); };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+  useEffect(() => {
+    if (popRef.current) { popRef.current = false; return; }
+    if (history.state && history.state.pageId === currentId) return;
+    history.pushState({ pageId: currentId }, '');
+  }, [currentId]);
   const [page, setPage] = useState(null);
   const [sharing, setSharing] = useState(false);
   const [tagFilter, setTagFilter] = useState(null);
