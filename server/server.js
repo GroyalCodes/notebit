@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.WIKI_DB || path.join(__dirname, 'data', 'wiki.db');
 const PORT = Number(process.env.PORT || 8200);
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 const ALLOW_SIGNUP = process.env.ALLOW_SIGNUP !== 'false';
 const WEB_DIR = path.join(__dirname, '..', 'web', 'dist');
 
@@ -713,8 +713,7 @@ app.get('/api/workspaces/:id/graph', async (req, reply) => {
   const u = requireUser(req, reply); if (!u) return;
   if (!u.is_admin && !db.prepare('SELECT 1 FROM workspace_member WHERE workspace_id=? AND user_id=?').get(req.params.id, u.id)) return reply.code(403).send({ error: 'not a member' });
   const all = db.prepare('SELECT id,title,icon,content,parent_id,view FROM pages WHERE workspace_id=? AND deleted_at IS NULL').all(req.params.id);
-  const columns = new Set(all.filter(p => p.view === 'column').map(p => p.id));
-  const pages = all.filter(p => !(p.parent_id && columns.has(p.parent_id)) && access(u, p.id).view);
+  const pages = all.filter(p => access(u, p.id).view); // include board columns + cards as nodes
   const ids = new Set(pages.map(p => p.id));
   const nodes = pages.map(p => ({ id: p.id, title: p.title, icon: p.icon }));
   const seen = new Set(); const edges = [];
