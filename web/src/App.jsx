@@ -1129,7 +1129,7 @@ function Settings({ me, setMe, currentWs, onWsChange, onLogout, onImported, onCl
           <div className={'set-tab' + (tab === 'trash' ? ' on' : '')} onClick={() => setTab('trash')}><Trash2 size={14} /> Trash</div>
           {me.is_admin === 1 && <div className={'set-tab' + (tab === 'workspace' ? ' on' : '')} onClick={() => setTab('workspace')}><SettingsIcon size={14} /> Workspace</div>}
           {me.is_admin === 1 && <div className={'set-tab' + (tab === 'data' ? ' on' : '')} onClick={() => setTab('data')}><BookOpen size={14} /> Import / Export</div>}
-          <a className="set-tab set-donate" href="https://ko-fi.com/V7V81I89ME" target="_blank" rel="noreferrer" title="Buy the developer a coffee"><Heart size={14} weight="fill" /> Donate</a>
+          <a className="set-tab set-donate" href="https://ko-fi.com/V7V81I89ME" target="_blank" rel="noreferrer" title="Support the dev on Ko-fi"><Heart size={14} weight="fill" /> Support the dev</a>
           <a className="set-brand" href="https://notebit.org" target="_blank" rel="noreferrer" title="notebit.org">
             <svg width="15" height="15" viewBox="0 0 32 32" aria-hidden="true">
               <g fill="currentColor"><rect x="1.5" y="1.5" width="6.5" height="6.5" rx="1.8"/><rect x="1.5" y="9" width="6.5" height="6.5" rx="1.8"/><rect x="1.5" y="16.5" width="6.5" height="6.5" rx="1.8"/><rect x="1.5" y="24" width="6.5" height="6.5" rx="1.8"/><rect x="24" y="9" width="6.5" height="6.5" rx="1.8"/><rect x="24" y="16.5" width="6.5" height="6.5" rx="1.8"/><rect x="24" y="24" width="6.5" height="6.5" rx="1.8"/><rect x="9" y="9" width="6.5" height="6.5" rx="1.8"/><rect x="16.5" y="16.5" width="6.5" height="6.5" rx="1.8"/></g>
