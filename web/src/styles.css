@@ -100,8 +100,9 @@ kbd { margin-left: auto; background: var(--bg); border: 1px solid var(--line2); 
 .drag-ghost { position: fixed; z-index: 2050; pointer-events: none; background: var(--panel2); border: 1px solid var(--accent-dim); border-radius: 8px; padding: 5px 11px; font-size: 12px; color: var(--text); display: flex; align-items: center; gap: 7px; box-shadow: 0 10px 30px rgba(0,0,0,.55); font-family: var(--pixel); opacity: .95; }
 .tree-row:hover { background: var(--hover); }
 .tree-row.active { background: var(--panel2); }
-.tree-row.active .tree-bglyph { flex: none; display: inline-flex; align-items: center; color: var(--muted); opacity: .85; margin: 0 -1px 0 1px; }
-.tree-label { color: var(--accent); }
+.tree-bglyph { flex: none; display: inline-flex; align-items: center; color: var(--muted); opacity: .85; margin: 0 -1px 0 1px; }
+.tree-label { color: var(--text-dim); }
+.tree-row.active .tree-label { color: var(--accent); }
 .tree-row.drop-in { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 1px var(--accent-dim); }
 .drop-line { position: absolute; left: 8px; right: 8px; height: 2px; background: var(--accent); border-radius: 2px; box-shadow: 0 0 4px var(--accent); }
 .drop-line.top { top: -1px; } .drop-line.bot { bottom: -1px; }
