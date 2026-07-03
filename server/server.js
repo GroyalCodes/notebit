@@ -18,9 +18,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.WIKI_DB || path.join(__dirname, 'data', 'wiki.db');
 const PORT = Number(process.env.PORT || 8200);
-const VERSION = '1.1.1';
+const VERSION = '1.2.0';
 const ALLOW_SIGNUP = process.env.ALLOW_SIGNUP !== 'false';
-const WEB_DIR = path.join(__dirname, '..', 'web', 'dist');
+const WEB_DIR = process.env.WEB_DIR || path.join(__dirname, '..', 'web', 'dist');
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 `);
 try { db.exec('ALTER TABLE users ADD COLUMN avatar TEXT'); } catch {}
 try { db.exec('ALTER TABLE users ADD COLUMN theme TEXT'); } catch {}
+try { db.exec("ALTER TABLE users ADD COLUMN prefs TEXT DEFAULT '{}'"); } catch {}
 try { db.exec("ALTER TABLE pages ADD COLUMN tags TEXT DEFAULT '[]'"); } catch {}
 try { db.exec('ALTER TABLE pages ADD COLUMN deleted_at TEXT'); } catch {}
 try { db.exec('ALTER TABLE pages ADD COLUMN cover TEXT'); } catch {}
@@ -63,6 +64,8 @@ db.exec("CREATE TABLE IF NOT EXISTS comments (id TEXT PRIMARY KEY, page_id TEXT 
 db.exec("CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, actor_id INTEGER, type TEXT, page_id TEXT, comment_id TEXT, body TEXT, read INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')))");
 db.exec("CREATE INDEX IF NOT EXISTS idx_comments_page ON comments(page_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, read)");
+db.exec("CREATE TABLE IF NOT EXISTS page_log (id TEXT PRIMARY KEY, page_id TEXT NOT NULL, user_id INTEGER NOT NULL, act TEXT NOT NULL, detail TEXT, created_at TEXT DEFAULT (datetime('now')))");
+db.exec("CREATE INDEX IF NOT EXISTS idx_pagelog_page ON page_log(page_id, created_at)");
 const persistYDoc = (name, ydoc) => { try { const u = Y.encodeStateAsUpdate(ydoc); db.prepare('INSERT INTO ydocs (page_id,data) VALUES (?,?) ON CONFLICT(page_id) DO UPDATE SET data=excluded.data').run(name, Buffer.from(u)); } catch {} };
 const collabDocs = new Map(); // room -> { ydoc, awareness, conns: Map<ws, Set<clientID>>, saveTimer }
 function getCollabDoc(room) {
@@ -151,19 +154,19 @@ const workspaceInfo = () => ({ name: getSetting('workspace_name', 'Wiki'), icon:
 
 // ---- email (Resend HTTP API) ----
 async function sendEmail(to, subject, html) {
-  const key = process.env.RESEND_API_KEY; if (!key) return { ok: false, error: 'no RESEND_API_KEY' };
+  const key = getSetting('resend_key') || process.env.RESEND_API_KEY; if (!key) return { ok: false, error: 'no RESEND_API_KEY' };
   try {
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: process.env.MAIL_FROM || 'NoteBit <info@playbitquest.com>', to, subject, html }),
+      body: JSON.stringify({ from: getSetting('mail_from') || process.env.MAIL_FROM || 'NoteBit <onboarding@resend.dev>', to, subject, html }),
     });
     const body = await r.json().catch(() => ({}));
     return { ok: r.ok, status: r.status, body };
   } catch (e) { return { ok: false, error: String(e) }; }
 }
 function inviteEmail(email, password, inviter, wsName) {
-  const url = process.env.APP_URL || 'https://wiki.playbitquest.com';
+  const url = process.env.APP_URL || 'http://localhost:8200';
   return `<div style="font-family:ui-sans-serif,system-ui,sans-serif;max-width:480px;margin:24px auto;color:#1f1f1f">
     <div style="font-size:22px;font-weight:700;color:#8a6fc4">📝 NoteBit</div>
     <h2 style="margin:14px 0 6px">You're invited!</h2>
@@ -182,7 +185,7 @@ const hashPw = (pw) => { const s = crypto.randomBytes(16); return s.toString('he
 const verifyPw = (pw, st) => { try { const [s, h] = st.split(':'); return crypto.timingSafeEqual(crypto.scryptSync(pw, Buffer.from(s, 'hex'), 64), Buffer.from(h, 'hex')); } catch { return false; } };
 const SDAYS = 30;
 const newSession = (uid) => { const t = crypto.randomBytes(32).toString('hex'); db.prepare('INSERT INTO sessions (token,user_id,expires_at) VALUES (?,?,?)').run(t, uid, Date.now() + SDAYS * 864e5); return t; };
-const userFromReq = (req) => { const t = req.cookies?.sid; if (!t) return null; const s = db.prepare('SELECT * FROM sessions WHERE token=?').get(t); if (!s || s.expires_at < Date.now()) return null; return db.prepare('SELECT id,email,name,is_admin,avatar,theme FROM users WHERE id=?').get(s.user_id) || null; };
+const userFromReq = (req) => { const t = req.cookies?.sid; if (!t) return null; const s = db.prepare('SELECT * FROM sessions WHERE token=?').get(t); if (!s || s.expires_at < Date.now()) return null; return db.prepare('SELECT id,email,name,is_admin,avatar,theme,prefs FROM users WHERE id=?').get(s.user_id) || null; };
 
 // ---- permissions (Notion-style: owner + admin override + grants, inherited down the tree) ----
 function ancestors(pageId) { const out = []; let cur = pageId, g = 0; while (cur && g++ < 200) { const p = db.prepare('SELECT id,parent_id,owner_id,locked FROM pages WHERE id=?').get(cur); if (!p) break; out.push(p); cur = p.parent_id; } return out; }
@@ -196,24 +199,23 @@ function access(user, pageId) {
   if (!user) return { view: false, edit: false };
   if (user.is_admin) return { view: true, edit: true, admin: true };
   const page = db.prepare('SELECT workspace_id,parent_id,status FROM pages WHERE id=?').get(pageId);
+  const wsRole = page?.workspace_id ? db.prepare('SELECT role FROM workspace_member WHERE workspace_id=? AND user_id=?').get(page.workspace_id, user.id)?.role : null;
   let res = null, locked = false;
   if (page?.parent_id) { const par = db.prepare('SELECT view,col_perm FROM pages WHERE id=?').get(page.parent_id); if (par && par.view === 'column' && par.col_perm === 'manager') locked = true; }
   for (const p of ancestors(pageId)) {
     if (p.locked) locked = true;
     if (!res) {
-      if (p.owner_id === user.id) res = { view: true, edit: true, admin: true };
-      else { const g = db.prepare('SELECT role FROM page_access WHERE page_id=? AND user_id=?').get(p.id, user.id); if (g) res = roleAccess(g.role); }
+      // the creator gets admin by default, but an explicit page grant (set by a
+      // workspace manager) overrides it: ownership is a badge, not a superpower
+      const g = db.prepare('SELECT role FROM page_access WHERE page_id=? AND user_id=?').get(p.id, user.id);
+      if (g) res = roleAccess(g.role);
+      else if (p.owner_id === user.id) res = { view: true, edit: true, admin: true };
     }
   }
-  if (!res && page?.workspace_id) {
-    const m = db.prepare('SELECT role FROM workspace_member WHERE workspace_id=? AND user_id=?').get(page.workspace_id, user.id);
-    if (m) res = roleAccess(m.role);
-  }
+  if (!res && wsRole) res = roleAccess(wsRole);
   if (!res) res = { view: false, edit: false };
-  if (locked && res.view) {
-    const isManager = page?.workspace_id && db.prepare('SELECT role FROM workspace_member WHERE workspace_id=? AND user_id=?').get(page.workspace_id, user.id)?.role === 'manage';
-    if (!isManager) res = { view: true, edit: false, admin: false };
-  }
+  if (wsRole === 'manage') res = { view: true, edit: true, admin: true }; // managers always keep control
+  if (locked && res.view && wsRole !== 'manage') res = { view: true, edit: false, admin: false };
   return res;
 }
 
@@ -328,7 +330,42 @@ app.delete('/api/workspaces/:id', async (req, reply) => {
 app.get('/api/workspaces/:id/export', async (req, reply) => {
   const u = requireUser(req, reply); if (!u) return;
   if (!u.is_admin) return reply.code(403).send({ error: 'admins only' });
-  return db.prepare('SELECT id,title,content,parent_id FROM pages WHERE workspace_id=? AND deleted_at IS NULL ORDER BY position,created_at').all(req.params.id);
+  return db.prepare('SELECT id,parent_id,title,icon,content,tags,position,cover,view,status,board_cols,list_cards,description,col_perm FROM pages WHERE workspace_id=? AND deleted_at IS NULL ORDER BY position,created_at').all(req.params.id);
+});
+// lossless NoteBit-to-NoteBit import: remaps ids (tree, page links, board columns, card
+// statuses) so boards and links survive migration between instances
+app.post('/api/workspaces/:id/import-native', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  if (!canManageWs(u, req.params.id)) return reply.code(403).send({ error: 'only managers' });
+  const pages = req.body?.pages;
+  if (!Array.isArray(pages) || !pages.length) return reply.code(400).send({ error: 'no pages in file' });
+  if (pages.length > 5000) return reply.code(400).send({ error: 'file too large (over 5000 pages)' });
+  const idMap = new Map();
+  for (const p of pages) if (p && p.id) idMap.set(String(p.id), crypto.randomUUID());
+  const remap = (s) => { if (!s || typeof s !== 'string') return s; let out = s; for (const [a, b] of idMap) out = out.split(a).join(b); return out; };
+  const basePos = db.prepare('SELECT MAX(position) m FROM pages WHERE workspace_id=? AND parent_id IS NULL AND deleted_at IS NULL').get(req.params.id)?.m || 0;
+  const ins = db.prepare('INSERT INTO pages (id,parent_id,owner_id,workspace_id,title,icon,content,tags,position,cover,view,status,board_cols,list_cards,description,col_perm) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+  let n = 0;
+  db.transaction(() => {
+    for (const p of pages) {
+      if (!p || !p.id || !idMap.has(String(p.id))) continue;
+      const par = p.parent_id && idMap.has(String(p.parent_id)) ? idMap.get(String(p.parent_id)) : null;
+      ins.run(
+        idMap.get(String(p.id)), par, u.id, req.params.id,
+        String(p.title || 'Untitled').slice(0, 300), p.icon || '📄',
+        remap(typeof p.content === 'string' ? p.content : JSON.stringify(p.content || [])),
+        typeof p.tags === 'string' ? p.tags : JSON.stringify(p.tags || []),
+        (Number(p.position) || 0) + (par ? 0 : basePos + 1),
+        p.cover || null, p.view || 'doc',
+        p.status != null ? remap(String(p.status)) : null,
+        p.board_cols ? remap(typeof p.board_cols === 'string' ? p.board_cols : JSON.stringify(p.board_cols)) : null,
+        p.list_cards ? 1 : 0, p.description || null,
+        p.col_perm === 'manager' ? 'manager' : 'member'
+      );
+      n++;
+    }
+  })();
+  return { ok: true, imported: n };
 });
 app.get('/api/workspaces/:id/templates', async (req, reply) => {
   const u = requireUser(req, reply); if (!u) return;
@@ -390,6 +427,22 @@ app.get('/api/me', async (req, reply) => { const u = userFromReq(req); if (!u) r
 
 // ---------- comments + inbox ----------
 const userPub = (id) => { const r = db.prepare('SELECT id,name,email,avatar FROM users WHERE id=?').get(id); return r ? { id: r.id, name: r.name || r.email, avatar: r.avatar } : { id, name: 'Someone' }; };
+// ---------- page changelog ----------
+// coalesce: same user + page + action within 15 min just refreshes the timestamp (keeps the log readable during active editing)
+const logPage = (pageId, userId, act, detail) => {
+  try {
+    const row = db.prepare("SELECT id FROM page_log WHERE page_id=? AND user_id=? AND act=? AND detail=? AND created_at > datetime('now','-15 minutes') ORDER BY created_at DESC LIMIT 1").get(pageId, userId, act, detail);
+    if (row) { db.prepare("UPDATE page_log SET created_at=datetime('now') WHERE id=?").run(row.id); return; }
+    db.prepare('INSERT INTO page_log (id,page_id,user_id,act,detail) VALUES (?,?,?,?,?)').run(crypto.randomUUID(), pageId, userId, act, detail);
+    db.prepare('DELETE FROM page_log WHERE page_id=? AND id NOT IN (SELECT id FROM page_log WHERE page_id=? ORDER BY created_at DESC LIMIT 60)').run(pageId, pageId);
+  } catch {}
+};
+app.get('/api/pages/:id/log', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  if (!access(u, req.params.id).view) return reply.code(403).send({ error: 'no access' });
+  return db.prepare('SELECT * FROM page_log WHERE page_id=? ORDER BY created_at DESC LIMIT 30').all(req.params.id)
+    .map(l => ({ id: l.id, act: l.act, detail: l.detail, created_at: l.created_at, user: userPub(l.user_id) }));
+});
 app.get('/api/pages/:id/comments', async (req, reply) => {
   const u = requireUser(req, reply); if (!u) return;
   if (!access(u, req.params.id).view) return reply.code(403).send({ error: 'no access' });
@@ -409,6 +462,7 @@ app.post('/api/pages/:id/comments', async (req, reply) => {
   const notify = (uid, type) => { uid = Number(uid); if (!uid || sent.has(uid)) return; sent.add(uid); db.prepare('INSERT INTO notifications (id,user_id,actor_id,type,page_id,comment_id,body) VALUES (?,?,?,?,?,?,?)').run(crypto.randomUUID(), uid, u.id, type, pageId, id, body.slice(0, 160)); };
   for (const m of mentions) notify(m, 'mention');
   if (page) notify(page.owner_id, 'comment');
+  logPage(pageId, u.id, '+', 'commented');
   return { ok: true, id };
 });
 app.delete('/api/comments/:id', async (req, reply) => {
@@ -438,11 +492,16 @@ app.get('/api/users', async (req, reply) => { if (!requireUser(req, reply)) retu
 // ---- profile / account ----
 app.put('/api/me', async (req, reply) => {
   const u = requireUser(req, reply); if (!u) return;
-  const { name, avatar, theme } = req.body || {};
+  const { name, avatar, theme, prefs } = req.body || {};
   if (name !== undefined) db.prepare('UPDATE users SET name=? WHERE id=?').run(String(name).slice(0, 80), u.id);
   if (avatar !== undefined) db.prepare('UPDATE users SET avatar=? WHERE id=?').run(avatar ? String(avatar).slice(0, 400000) : null, u.id);
   if (theme !== undefined) db.prepare('UPDATE users SET theme=? WHERE id=?').run(theme ? String(theme).slice(0, 20) : null, u.id);
-  return db.prepare('SELECT id,email,name,is_admin,avatar,theme FROM users WHERE id=?').get(u.id);
+  if (prefs !== undefined) { // merge, so callers can update one key without clobbering others
+    let cur = {}; try { cur = JSON.parse(u.prefs || '{}'); } catch {}
+    const next = { ...cur, ...(prefs && typeof prefs === 'object' ? prefs : {}) };
+    db.prepare('UPDATE users SET prefs=? WHERE id=?').run(JSON.stringify(next).slice(0, 200000), u.id);
+  }
+  return db.prepare('SELECT id,email,name,is_admin,avatar,theme,prefs FROM users WHERE id=?').get(u.id);
 });
 app.post('/api/auth/change-password', async (req, reply) => {
   const u = requireUser(req, reply); if (!u) return;
@@ -493,12 +552,24 @@ app.delete('/api/admin/users/:id', async (req, reply) => {
   })();
   return { ok: true };
 });
-app.get('/api/admin/settings', async (req, reply) => { if (!requireAdmin(req, reply)) return; return { allow_signup: allowSignup() }; });
+app.get('/api/admin/settings', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  const keySource = getSetting('resend_key') ? 'app' : (process.env.RESEND_API_KEY ? 'env' : null);
+  return { allow_signup: allowSignup(), email_configured: !!keySource, email_key_source: keySource, mail_from: getSetting('mail_from') || process.env.MAIL_FROM || '' };
+});
+app.post('/api/admin/test-email', async (req, reply) => {
+  const u = requireAdmin(req, reply); if (!u) return;
+  const r = await sendEmail(u.email, 'NoteBit test email', '<p>Email invites are working. Sent from your NoteBit instance.</p>');
+  return { ok: !!r.ok, detail: r.ok ? 'sent to ' + u.email : (r.body?.message || r.error || 'failed') };
+});
 app.put('/api/admin/settings', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
-  const { allow_signup } = req.body || {};
+  const { allow_signup, resend_key, mail_from } = req.body || {};
   if (allow_signup !== undefined) setSetting('allow_signup', allow_signup ? '1' : '0');
-  return { allow_signup: allowSignup() };
+  if (resend_key !== undefined) setSetting('resend_key', String(resend_key).trim().slice(0, 200));
+  if (mail_from !== undefined) setSetting('mail_from', String(mail_from).trim().slice(0, 200));
+  const keySource = getSetting('resend_key') ? 'app' : (process.env.RESEND_API_KEY ? 'env' : null);
+  return { allow_signup: allowSignup(), email_configured: !!keySource, email_key_source: keySource, mail_from: getSetting('mail_from') || process.env.MAIL_FROM || '' };
 });
 
 // ---- search ----
@@ -543,6 +614,8 @@ app.post('/api/pages', async (req, reply) => {
   const id = crypto.randomUUID();
   const pos = (db.prepare('SELECT MAX(position) m FROM pages WHERE parent_id IS ?').get(parent_id)?.m || 0) + 1;
   db.prepare('INSERT INTO pages (id,parent_id,owner_id,workspace_id,title,position,content,status) VALUES (?,?,?,?,?,?,?,?)').run(id, parent_id, u.id, wsId, title, pos, '[]', status);
+  logPage(id, u.id, '+', 'created this page');
+  if (parent_id) logPage(parent_id, u.id, '+', `added "${String(title).slice(0, 60) || 'Untitled'}"`);
   return db.prepare('SELECT * FROM pages WHERE id=?').get(id);
 });
 app.get('/api/pages/:id', async (req, reply) => {
@@ -581,6 +654,16 @@ app.put('/api/pages/:id', async (req, reply) => {
          b.description !== undefined ? b.description : (p.description ?? null),
          b.col_perm !== undefined ? (b.col_perm === 'manager' ? 'manager' : 'member') : (p.col_perm ?? 'member'),
          p.id);
+  if (b.title !== undefined && b.title !== p.title) logPage(p.id, u.id, '~', `renamed to "${String(b.title).slice(0, 60) || 'Untitled'}"`);
+  if (b.content !== undefined && b.content !== p.content) logPage(p.id, u.id, '~', 'edited');
+  if (b.parent_id !== undefined && b.parent_id !== p.parent_id) logPage(p.id, u.id, '~', 'moved');
+  if (b.status !== undefined && b.status !== p.status) logPage(p.id, u.id, '~', 'moved card');
+  if (b.locked !== undefined && !!b.locked !== !!p.locked) logPage(p.id, u.id, '~', b.locked ? 'locked the page' : 'unlocked the page');
+  if (b.is_public !== undefined && !!b.is_public !== !!p.is_public) logPage(p.id, u.id, '~', b.is_public ? 'published to web' : 'unpublished');
+  if (b.tags !== undefined) logPage(p.id, u.id, '~', 'updated tags');
+  if (b.icon !== undefined && b.icon !== p.icon) logPage(p.id, u.id, '~', 'changed the icon');
+  if (b.cover !== undefined && b.cover !== p.cover) logPage(p.id, u.id, '~', b.cover ? 'updated the cover' : 'removed the cover');
+  if (b.board_cols !== undefined) logPage(p.id, u.id, '~', 'updated the board');
   return db.prepare('SELECT * FROM pages WHERE id=?').get(p.id);
 });
 app.delete('/api/pages/:id', async (req, reply) => {
@@ -589,7 +672,10 @@ app.delete('/api/pages/:id', async (req, reply) => {
   const ids = [], stack = [req.params.id];
   while (stack.length) { const c = stack.pop(); ids.push(c); for (const k of db.prepare('SELECT id FROM pages WHERE parent_id=? AND deleted_at IS NULL').all(c)) stack.push(k.id); }
   const upd = db.prepare("UPDATE pages SET deleted_at=datetime('now') WHERE id=?");
+  const pg = db.prepare('SELECT title,parent_id FROM pages WHERE id=?').get(req.params.id);
   db.transaction(() => ids.forEach(i => upd.run(i)))();
+  logPage(req.params.id, u.id, '-', 'moved to trash');
+  if (pg?.parent_id) logPage(pg.parent_id, u.id, '-', `removed "${String(pg.title).slice(0, 60) || 'Untitled'}"`);
   return { ok: true, trashed: ids.length };
 });
 
@@ -604,7 +690,7 @@ app.get('/api/pages/:id/access', async (req, reply) => {
   const seen = new Set();
   const members = (p.workspace_id ? db.prepare('SELECT u.id,u.name,u.email,u.avatar,m.role FROM workspace_member m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=?').all(p.workspace_id) : []).map(m => {
     seen.add(m.id); const pageRole = grants[m.id] || null; const isOwner = m.id === p.owner_id;
-    return { id: m.id, name: m.name, email: m.email, avatar: m.avatar, wsRole: m.role, pageRole, isOwner, role: isOwner ? 'manage' : (pageRole || m.role) };
+    return { id: m.id, name: m.name, email: m.email, avatar: m.avatar, wsRole: m.role, pageRole, isOwner, role: pageRole || (isOwner ? 'manage' : m.role) };
   });
   for (const [uid, role] of Object.entries(grants)) {
     const idn = Number(uid); if (seen.has(idn)) continue;
@@ -676,6 +762,7 @@ app.post('/api/pages/:id/restore', async (req, reply) => {
   const parentGone = !p.parent_id || !db.prepare('SELECT 1 FROM pages WHERE id=? AND deleted_at IS NULL').get(p.parent_id);
   db.transaction(() => {
     ids.forEach(i => db.prepare('UPDATE pages SET deleted_at=NULL WHERE id=?').run(i));
+    logPage(req.params.id, u.id, '+', 'restored from trash');
     if (parentGone) db.prepare('UPDATE pages SET parent_id=NULL WHERE id=?').run(req.params.id);
   })();
   return { ok: true };
@@ -712,10 +799,10 @@ app.get('/api/pages/:id/backlinks', async (req, reply) => {
 app.get('/api/workspaces/:id/graph', async (req, reply) => {
   const u = requireUser(req, reply); if (!u) return;
   if (!u.is_admin && !db.prepare('SELECT 1 FROM workspace_member WHERE workspace_id=? AND user_id=?').get(req.params.id, u.id)) return reply.code(403).send({ error: 'not a member' });
-  const all = db.prepare('SELECT id,title,icon,content,parent_id,view FROM pages WHERE workspace_id=? AND deleted_at IS NULL').all(req.params.id);
+  const all = db.prepare('SELECT id,title,icon,content,parent_id,view,tags FROM pages WHERE workspace_id=? AND deleted_at IS NULL').all(req.params.id);
   const pages = all.filter(p => access(u, p.id).view); // include board columns + cards as nodes
   const ids = new Set(pages.map(p => p.id));
-  const nodes = pages.map(p => ({ id: p.id, title: p.title, icon: p.icon }));
+  const nodes = pages.map(p => { let tg = []; try { tg = (JSON.parse(p.tags || '[]') || []).map(t => (typeof t === 'string' ? t : t?.name || '').toLowerCase()).filter(Boolean); } catch {} return { id: p.id, title: p.title, icon: p.icon, tags: tg, root: !p.parent_id }; });
   const seen = new Set(); const edges = [];
   for (const a of pages) {
     if (a.parent_id && ids.has(a.parent_id)) { const k = a.parent_id + '>' + a.id; if (!seen.has(k)) { seen.add(k); edges.push({ from: a.parent_id, to: a.id, kind: 'tree' }); } }

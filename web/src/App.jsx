@@ -1,14 +1,17 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
-import { useCreateBlockNote, createReactInlineContentSpec, createReactBlockSpec, SuggestionMenuController, getDefaultReactSlashMenuItems, SideMenu, SideMenuController, DragHandleMenu, RemoveBlockItem, useBlockNoteEditor, useComponentsContext } from '@blocknote/react';
+import { useCreateBlockNote, createReactInlineContentSpec, createReactBlockSpec, SuggestionMenuController, getDefaultReactSlashMenuItems, SideMenu, SideMenuController, DragHandleMenu, RemoveBlockItem, useBlockNoteEditor, useComponentsContext, AddBlockButton } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/mantine';
-import { BlockNoteSchema, defaultInlineContentSpecs, defaultBlockSpecs, filterSuggestionItems, insertOrUpdateBlock } from '@blocknote/core';
+import { BlockNoteSchema, defaultInlineContentSpecs, defaultBlockSpecs, filterSuggestionItems, insertOrUpdateBlock, createBlockSpec } from '@blocknote/core';
+import { createRoot } from 'react-dom/client';
+import { TextSelection } from 'prosemirror-state';
+import * as GameIcons from 'react-icons/gi';
 import '@blocknote/mantine/style.css';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import JSZip from 'jszip';
 import api from './api.js';
-import { BookOpen, MagnifyingGlass as SearchIcon, Plus, Trash as Trash2, Gear as SettingsIcon, User, Users, Globe, Tag as TagIcon, X, CaretDown as ChevronDown, CaretRight as ChevronRight, PencilSimple as Pencil, Eye, ShareNetwork as Share2, DotsSixVertical as GripVertical, List as Menu, NotePencil, Crown, Lock, LockOpen, DotsThree, LinkSimple, Bell, ChatCircle } from '@phosphor-icons/react';
+import { BookOpen, MagnifyingGlass as SearchIcon, Plus, Trash as Trash2, Gear as SettingsIcon, User, Users, Globe, Tag as TagIcon, X, CaretDown as ChevronDown, CaretRight as ChevronRight, PencilSimple as Pencil, Eye, ShareNetwork as Share2, DotsSixVertical as GripVertical, List as Menu, NotePencil, Crown, Lock, LockOpen, DotsThree, LinkSimple, Bell, ChatCircle, TextT, TextHOne, TextHTwo, TextHThree, ListBullets, ListNumbers, CheckSquare, Code as CodeIcon, Lightbulb, CopySimple, ClockCounterClockwise, TextB, TextItalic, TextUnderline, TextStrikethrough, TextIndent, TextOutdent, ArrowUp, ArrowDown, Scissors, ClipboardText, Quotes, Minus } from '@phosphor-icons/react';
 const ROLE_INFO = { read: { label: 'Read', icon: Eye }, write: { label: 'Write', icon: Pencil }, manage: { label: 'Manage', icon: Crown } };
 import EmojiPicker from 'emoji-picker-react';
 import * as Phosphor from '@phosphor-icons/react';
@@ -17,6 +20,9 @@ for (const [k, v] of Object.entries(Phosphor)) {
   if (/^[A-Z]/.test(k) && !/Icon$/.test(k) && !['IconBase', 'IconContext', 'SSR'].includes(k) && v && (typeof v === 'object' || typeof v === 'function')) PH[k] = v;
 }
 const PH_NAMES = Object.keys(PH);
+const GI = {};
+for (const [k, v] of Object.entries(GameIcons)) { if (k.startsWith('Gi') && typeof v === 'function') GI[k.slice(2)] = v; }
+const GI_NAMES = Object.keys(GI);
 const THEMES = [
   { id: 'amethyst', name: 'Amethyst', color: '#a78bdb' },
   { id: 'ocean', name: 'Ocean', color: '#6f9fe0' },
@@ -39,22 +45,39 @@ function Logo({ size = 32 }) {
   );
 }
 const treeSig = (list) => (list || []).map(p => `${p.id}:${p.title}:${p.parent_id}:${p.position}:${p.icon}:${p.is_public}:${p.status}:${p.view}:${p.locked}:${p.list_cards}`).join('|');
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.2.0';
 function PageIcon({ icon, size = 18 }) {
   if (icon && icon.startsWith('dot:')) { const c = icon.slice(4); return <span style={{ width: Math.round(size * 0.62), height: Math.round(size * 0.62), borderRadius: '50%', background: BOARD_COLORS[c] || c || 'var(--muted)', display: 'inline-block', flex: 'none' }} />; }
   if (icon && icon.startsWith('ph:')) { const p = icon.split(':'); const I = PH[p[1]]; if (I) return <I size={size} weight="fill" color={p[2] || undefined} />; }
-  const emoji = icon && !icon.startsWith('ph:') && !icon.startsWith('li:') ? icon : '📄';
+  if (icon && icon.startsWith('gi:')) { const p = icon.split(':'); const I = GI[p[1]]; if (I) return <I size={size} color={p[2] || undefined} style={{ flex: 'none' }} />; }
+  const emoji = icon && !icon.startsWith('ph:') && !icon.startsWith('gi:') && !icon.startsWith('li:') ? icon : '📄';
   return <span style={{ fontSize: size, lineHeight: 1 }}>{emoji}</span>;
 }
 function BoardGlyph({ size = 15 }) {
   return <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" style={{ flex: 'none' }}><rect x="1.5" y="2.5" width="3.4" height="11" rx="1.2" /><rect x="6.3" y="2.5" width="3.4" height="7.5" rx="1.2" /><rect x="11.1" y="2.5" width="3.4" height="9.3" rx="1.2" /></svg>;
 }
 // page reference inline content (#mention) + schema
+// live registry so mention chips always show the page's CURRENT title/icon
+const pageMetaStore = { map: new Map(), v: 0, subs: new Set() };
+function feedPageMeta(pages) {
+  pageMetaStore.map = new Map(pages.map(p => [p.id, (p.title || '') + '\u0000' + (p.icon || '')]));
+  pageMetaStore.v++;
+  pageMetaStore.subs.forEach(f => { try { f(); } catch {} });
+}
+function usePageLive(id) {
+  return useSyncExternalStore(
+    (cb) => { pageMetaStore.subs.add(cb); return () => pageMetaStore.subs.delete(cb); },
+    () => pageMetaStore.map.get(id) ?? (pageMetaStore.v ? '__gone__' : null)
+  );
+}
 const PageLink = createReactInlineContentSpec(
   { type: 'pageLink', propSchema: { pageId: { default: '' }, title: { default: '' }, icon: { default: '📄' } }, content: 'none' },
   { render: (props) => {
       const { pageId, title, icon } = props.inlineContent.props;
-      return <span className="page-mention" data-page={pageId}><PageIcon icon={icon} size={18} /><span>{title || 'Untitled'}</span></span>;
+      const live = usePageLive(pageId);
+      const gone = live === '__gone__';
+      const [t, ic] = live && !gone ? live.split('\u0000') : [title, icon];
+      return <span className={'page-mention' + (gone ? ' gone' : '')} data-page={pageId} title={gone ? 'This page was moved or deleted' : undefined}><PageIcon icon={ic || icon} size={18} /><span>{t || title || 'Untitled'}</span></span>;
     } }
 );
 const CALLOUT_COLORS = {
@@ -81,21 +104,87 @@ function CalloutControl({ emoji, bg, onEmoji, onBg }) {
     </span>
   );
 }
-const Callout = createReactBlockSpec(
+// Vanilla (non-React) node view: the content area exists synchronously, so remote
+// collaborators' text inside callouts renders reliably. Only the emoji/color control
+// is React, mounted beside the content, never wrapping it.
+const Callout = createBlockSpec(
   { type: 'callout', propSchema: { emoji: { default: '💡' }, bg: { default: 'accent' } }, content: 'inline' },
   {
-    render: ({ block, editor, contentRef }) => (
-      <div className="callout" style={{ background: (CALLOUT_COLORS[block.props.bg] || CALLOUT_COLORS.accent).bg }}>
-        {editor.isEditable
-          ? <CalloutControl emoji={block.props.emoji} bg={block.props.bg} onEmoji={(emoji) => editor.updateBlock(block, { props: { emoji } })} onBg={(bg) => editor.updateBlock(block, { props: { bg } })} />
-          : <span className="callout-emoji" contentEditable={false}><span className="ce-btn">{block.props.emoji}</span></span>}
-        <div className="callout-content" ref={contentRef} />
-      </div>
-    ),
+    render: (block, editor) => {
+      const dom = document.createElement('div');
+      dom.className = 'callout';
+      dom.style.background = (CALLOUT_COLORS[block.props.bg] || CALLOUT_COLORS.accent).bg;
+      const ctl = document.createElement('span');
+      ctl.contentEditable = 'false';
+      ctl.style.flex = 'none';
+      const content = document.createElement('div');
+      content.className = 'callout-content';
+      dom.append(ctl, content);
+      const emoji = block.props.emoji || '💡';
+      let root = null;
+      if (editor.isEditable) {
+        root = createRoot(ctl);
+        root.render(<CalloutControl emoji={emoji} bg={block.props.bg}
+          onEmoji={(em) => { try { editor.updateBlock(block, { props: { emoji: em || '💡' } }); } catch {} }}
+          onBg={(bg) => { try { editor.updateBlock(block, { props: { bg } }); } catch {} }} />);
+      } else {
+        ctl.className = 'callout-emoji';
+        const b = document.createElement('span');
+        b.className = 'ce-btn';
+        b.textContent = emoji;
+        ctl.appendChild(b);
+      }
+      return { dom, contentDOM: content, destroy: () => { const r = root; root = null; if (r) queueMicrotask(() => r.unmount()); } };
+    },
   }
 );
+// Collapsible toggle: the line is the editable title, Tab-nested children collapse.
+// collapsed is a block prop, so state persists and syncs to collaborators.
+const ToggleBlock = createBlockSpec(
+  { type: 'toggle', propSchema: { collapsed: { default: false }, level: { default: 0 } }, content: 'inline' },
+  {
+    render: (block, editor) => {
+      const dom = document.createElement('div');
+      dom.className = 'toggle-blk' + (block.props.collapsed ? ' closed' : '') + (block.props.level ? ' h' + block.props.level : '');
+      const btn = document.createElement('button');
+      btn.className = 'tg-btn'; btn.type = 'button'; btn.contentEditable = 'false'; btn.title = 'Toggle';
+      btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 256 256" fill="currentColor"><path d="M181.66,133.66l-80,80A8,8,0,0,1,88,208V48a8,8,0,0,1,13.66-5.66l80,80A8,8,0,0,1,181.66,133.66Z"></path></svg>';
+      const content = document.createElement('div');
+      content.className = 'tg-title';
+      dom.append(btn, content);
+      const applyChildren = () => {
+        const grp = dom.closest('.bn-block')?.querySelector(':scope > .bn-block-group');
+        if (grp) grp.style.display = block.props.collapsed ? 'none' : '';
+      };
+      queueMicrotask(applyChildren);
+      btn.onclick = () => {
+        if (editor.isEditable) {
+          try {
+            const cur = editor.getBlock(block.id);
+            if (cur && block.props.collapsed && !(cur.children || []).length) {
+              editor.updateBlock(block.id, { props: { collapsed: false }, children: [{ type: 'paragraph' }] });
+            } else editor.updateBlock(block.id, { props: { collapsed: !block.props.collapsed } });
+          } catch {}
+        } else { // read-only viewers can still open/close locally
+          dom.classList.toggle('closed');
+          const grp = dom.closest('.bn-block')?.querySelector(':scope > .bn-block-group');
+          if (grp) grp.style.display = dom.classList.contains('closed') ? 'none' : '';
+        }
+      };
+      return { dom, contentDOM: content };
+    },
+  }
+);
+const QuoteBlock = createBlockSpec(
+  { type: 'quote', propSchema: {}, content: 'inline' },
+  { render: () => { const dom = document.createElement('blockquote'); dom.className = 'quote-blk'; return { dom, contentDOM: dom }; } }
+);
+const DividerBlock = createBlockSpec(
+  { type: 'divider', propSchema: {}, content: 'none' },
+  { render: () => { const dom = document.createElement('div'); dom.className = 'divider-blk'; dom.contentEditable = 'false'; dom.appendChild(document.createElement('hr')); return { dom }; } }
+);
 const schema = BlockNoteSchema.create({
-  blockSpecs: { ...defaultBlockSpecs, callout: Callout },
+  blockSpecs: { ...defaultBlockSpecs, callout: Callout, toggle: ToggleBlock, quote: QuoteBlock, divider: DividerBlock },
   inlineContentSpecs: { ...defaultInlineContentSpecs, pageLink: PageLink },
 });
 
@@ -103,11 +192,30 @@ function IconPicker({ onPick, onClose }) {
   const [tab, setTab] = useState('emoji');
   const [q, setQ] = useState('');
   const [color, setColor] = useState('');
-  const results = useMemo(() => { const s = q.trim().toLowerCase(); return (s ? PH_NAMES.filter(n => n.toLowerCase().includes(s)) : PH_NAMES).slice(0, 168); }, [q]);
+  const [iset, setIset] = useState('ph'); // ph = classic (Phosphor), gi = fantasy (Game Icons)
+  const popRef = useRef(null);
+  // one search across both tabs: mirror our query into the emoji picker's own field
+  useEffect(() => {
+    if (tab !== 'emoji') return;
+    const inp = popRef.current?.querySelector('input.epr-search, .epr-search-container input');
+    if (!inp) return;
+    if (q && inp.value !== q) {
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      set.call(inp, q); inp.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    const h = (e) => setQ(e.target.value);
+    inp.addEventListener('input', h);
+    return () => inp.removeEventListener('input', h);
+  }, [tab]);
+  const results = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    const names = iset === 'gi' ? GI_NAMES : PH_NAMES;
+    return (s ? names.filter(n => n.toLowerCase().includes(s)) : names).slice(0, 220);
+  }, [q, iset]);
   return (
     <>
       <div className="picker-overlay" onClick={e => { e.stopPropagation(); onClose(); }} />
-      <div className="icon-pop" onClick={e => e.stopPropagation()}>
+      <div className="icon-pop" ref={popRef} onClick={e => e.stopPropagation()}>
         <div className="icon-tabs">
           <span className={tab === 'emoji' ? 'on' : ''} onClick={() => setTab('emoji')}>Emoji</span>
           <span className={tab === 'icons' ? 'on' : ''} onClick={() => setTab('icons')}>Icons</span>
@@ -116,12 +224,15 @@ function IconPicker({ onPick, onClose }) {
         {tab === 'emoji'
           ? <EmojiPicker onEmojiClick={e => { onPick(e.emoji); onClose(); }} theme="dark" emojiStyle="native" width={352} height={358} previewConfig={{ showPreview: false }} skinTonesDisabled lazyLoadEmojis />
           : <div className="icon-tab">
-              <input className="icon-search" autoFocus placeholder={`Search ${PH_NAMES.length} icons…`} value={q} onChange={e => setQ(e.target.value)} />
+              <input className="icon-search" autoFocus placeholder={`Search ${(iset === 'gi' ? GI_NAMES : PH_NAMES).length.toLocaleString()} ${iset === 'gi' ? 'fantasy' : 'classic'} icons…`} value={q} onChange={e => setQ(e.target.value)} />
               <div className="icon-colors">
+                <span className={'iset-chip' + (iset === 'ph' ? ' on' : '')} onClick={() => setIset('ph')}>Classic</span>
+                <span className={'iset-chip' + (iset === 'gi' ? ' on' : '')} onClick={() => setIset('gi')}>Fantasy</span>
+                <span className="grow" />
                 <span className={'cdot none' + (color === '' ? ' on' : '')} title="Default" onClick={() => setColor('')} />
                 {TAG_COLORS.map(c => <span key={c} className={'cdot' + (c === color ? ' on' : '')} style={{ background: c }} onClick={() => setColor(c)} />)}
               </div>
-              <div className="icon-grid">{results.map(name => { const I = PH[name]; return <button key={name} title={name} onClick={() => { onPick('ph:' + name + (color ? ':' + color : '')); onClose(); }}><I size={22} weight="fill" color={color || undefined} /></button>; })}</div>
+              <div className="icon-grid">{results.map(name => { const I = iset === 'gi' ? GI[name] : PH[name]; return <button key={iset + name} title={name} onClick={() => { onPick(iset + ':' + name + (color ? ':' + color : '')); onClose(); }}>{iset === 'gi' ? <I size={22} color={color || undefined} /> : <I size={22} weight="fill" color={color || undefined} />}</button>; })}</div>
               {q && results.length === 0 && <div className="muted small pad">No icons match “{q}”</div>}
             </div>}
       </div>
@@ -292,18 +403,18 @@ function Login({ onAuth, ws }) {
         <button className="btn-gold" disabled={busy}>{busy ? '…' : mode === 'login' ? 'Sign in' : first ? 'Create admin' : 'Sign up'}</button>
         {!first && cfg.allowSignup && <div className="switch" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setErr(''); }}>
           {mode === 'login' ? 'Need an account? Sign up' : 'Have an account? Sign in'}</div>}
-        <div className="login-ver">NoteBit v{APP_VERSION} · <a href="https://github.com/GroyalCodes/notebit" target="_blank" rel="noreferrer">open source</a></div>
+        <div className="login-ver">NoteBit v{APP_VERSION} · <a href="https://github.com/GroyalCodes/notebit" target="_blank" rel="noreferrer">open source</a> · <a href="https://notebit.org" target="_blank" rel="noreferrer">cloud</a></div>
       </form>
     </div>
   );
 }
 
 // ---------- sidebar tree — pointer-based drag & drop ----------
-function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, canManage }) {
+function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, canManage, collapsedInit, onCollapse }) {
   const [over, setOver] = useState(null);          // { id, zone } drop indicator
   const [drag, setDrag] = useState(null);          // page being dragged (floating preview)
   const [pos, setPos] = useState({ x: 0, y: 0 });
-  const [collapsed, setCollapsed] = useState(() => new Set());
+  const [collapsed, setCollapsed] = useState(() => new Set(collapsedInit || []));
   const di = useRef(null);                          // { id, startX, startY, active }
   const overRef = useRef(null);
   const draggedRef = useRef(false);
@@ -323,7 +434,7 @@ function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, canMa
   }, [pages]);
   const isDescendant = (anc, node) => { const bid = Object.fromEntries(pagesRef.current.map(p => [p.id, p])); let cur = node; while (cur) { if (cur === anc) return true; cur = bid[cur]?.parent_id; } return false; };
   const setOv = v => { overRef.current = v; setOver(v); };
-  const toggle = id => setCollapsed(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggle = id => setCollapsed(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); onCollapse?.([...n]); return n; });
 
   useEffect(() => {
     const mm = e => {
@@ -374,7 +485,7 @@ function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, canMa
           {dz === 'after' && <span className="drop-line bot" />}
           <span className="grip"><GripVertical size={12} /></span>
           <span className="twist" onClick={() => toggle(p.id)}>{kids.length ? (open ? <ChevronDown size={12} /> : <ChevronRight size={12} />) : ''}</span>
-          <span className="tree-label" onClick={() => { if (draggedRef.current) return; onOpen(p.id); }}><span className="ic"><PageIcon icon={p.icon} size={17} /></span><span className="tl-text">{p.title || 'Untitled'}</span></span>
+          <span className="tree-label" onClick={() => { if (draggedRef.current) return; onOpen(p.id); }}><span className="ic"><PageIcon icon={p.icon} size={17} /></span>{p.view === 'board' && <span className="tree-bglyph" title="Board" style={{ color: (p.icon || '').split(':')[2] || undefined }}><BoardGlyph size={11} /></span>}<span className="tl-text">{p.title || 'Untitled'}</span></span>
           {canManage && <span className="row-actions" onMouseDown={e => e.stopPropagation()}>
             <button title="New subpage" onClick={e => { e.stopPropagation(); onNew(p.id); }}><Plus size={13} /></button>
             <button title="Delete" onClick={e => { e.stopPropagation(); onDelete(p.id); }}><Trash2 size={12} /></button>
@@ -399,6 +510,8 @@ function Tags({ tags, editable, workspace, onChange, onTagClick }) {
   const [all, setAll] = useState([]);
   const [color, setColor] = useState(null);
   const [hi, setHi] = useState(0);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const anchorRef = useRef(null);
   useEffect(() => { if (open) api('/tags' + (workspace ? '?workspace=' + workspace : '')).then(setAll).catch(() => {}); else { setQ(''); setColor(null); } }, [open]);
   useEffect(() => { setHi(0); }, [q]);
   const names = new Set(tags.map(t => t.name.toLowerCase()));
@@ -414,11 +527,11 @@ function Tags({ tags, editable, workspace, onChange, onTagClick }) {
   return (
     <div className="tags">
       {tags.map(t => <span className={'tag' + (onTagClick ? ' clickable' : '')} key={t.name} style={{ '--tc': t.color || tagColor(t.name) }} onClick={() => onTagClick && onTagClick(t.name, t.color)}>{t.name}{editable && <X size={11} className="tx" onClick={e => { e.stopPropagation(); remove(t.name); }} />}</span>)}
-      {editable && <span style={{ position: 'relative' }}>
-        <span className="tag add" onClick={() => setOpen(v => !v)}><Plus size={12} /> Tag</span>
-        {open && <>
+      {editable && <span style={{ position: 'relative' }} ref={anchorRef}>
+        <span className="tag add" onClick={() => { if (!open && anchorRef.current) { const r = anchorRef.current.getBoundingClientRect(); setPos({ x: Math.min(r.left, window.innerWidth - 246), y: Math.min(r.bottom + 6, window.innerHeight - 320) }); } setOpen(v => !v); }}><Plus size={12} /> Tag</span>
+        {open && createPortal(<>
           <div className="picker-overlay" onClick={e => { e.stopPropagation(); setOpen(false); }} />
-          <div className="tag-pop">
+          <div className="tag-pop portal" style={{ left: pos.x, top: pos.y }}>
             <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search or create a tag…" onKeyDown={e => {
               if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(h + 1, opts.length - 1)); }
               else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(0, h - 1)); }
@@ -433,15 +546,17 @@ function Tags({ tags, editable, workspace, onChange, onTagClick }) {
               {!opts.length && <div className="muted small tag-empty">{ql ? 'Press Enter to create' : 'Type to search or create a tag'}</div>}
             </div>
           </div>
-        </>}
+        </>, document.body)}
       </span>}
     </div>
   );
 }
 function Properties({ tags, editable, workspace, onChange, onTagClick }) {
   const [open, setOpen] = useState(true);
+  const has = (tags || []).length > 0;
+  if (!has && !editable) return null;
   return (
-    <div className="props">
+    <div className={'props' + (has ? '' : ' empty')}>
       <span className="props-toggle" onClick={() => setOpen(!open)}>{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />} Properties</span>
       {open && <div className="prop-row"><span className="prop-key"><TagIcon size={13} /> Tags</span><Tags tags={tags} editable={editable} workspace={workspace} onChange={onChange} onTagClick={onTagClick} /></div>}
     </div>
@@ -450,28 +565,61 @@ function Properties({ tags, editable, workspace, onChange, onTagClick }) {
 
 // ---------- editor ----------
 const TURN_INTO = [
-  ['Text', 'paragraph', {}],
-  ['Heading 1', 'heading', { level: 1 }],
-  ['Heading 2', 'heading', { level: 2 }],
-  ['Heading 3', 'heading', { level: 3 }],
-  ['Bullet List', 'bulletListItem', {}],
-  ['Numbered List', 'numberedListItem', {}],
-  ['Check List', 'checkListItem', {}],
-  ['Code', 'codeBlock', {}],
-  ['Callout', 'callout', {}],
+  { label: 'Text', icon: TextT, type: 'paragraph', props: {} },
+  { label: 'Heading', icon: TextHOne, sub: [
+    { label: 'Heading 1', icon: TextHOne, type: 'heading', props: { level: 1 } },
+    { label: 'Heading 2', icon: TextHTwo, type: 'heading', props: { level: 2 } },
+    { label: 'Heading 3', icon: TextHThree, type: 'heading', props: { level: 3 } },
+    { label: 'Toggle heading', icon: ChevronRight, type: 'toggle', props: { level: 2 } },
+  ] },
+  { label: 'List', icon: ListBullets, sub: [
+    { label: 'Bulleted', icon: ListBullets, type: 'bulletListItem', props: {} },
+    { label: 'Numbered', icon: ListNumbers, type: 'numberedListItem', props: {} },
+    { label: 'To-do', icon: CheckSquare, type: 'checkListItem', props: {} },
+  ] },
+  { label: 'Code', icon: CodeIcon, type: 'codeBlock', props: {} },
+  { label: 'Callout', icon: Lightbulb, type: 'callout', props: {} },
+  { label: 'Toggle', icon: ChevronRight, type: 'toggle', props: {} },
+  { label: 'Quote', icon: Quotes, type: 'quote', props: {} },
 ];
+const stripIds = (b) => ({ ...b, id: undefined, children: (b.children || []).map(stripIds) });
 function TurnIntoMenu(props) {
   const editor = useBlockNoteEditor();
   const Components = useComponentsContext();
+  const turn = (t, p) => { try { editor.updateBlock(props.block, { type: t, props: p }); } catch {} };
+  const dup = () => { try { editor.insertBlocks([stripIds(props.block)], props.block, 'after'); } catch {} };
+  const leaf = (it) => (
+    <Components.Generic.Menu.Item key={it.label} onClick={() => turn(it.type, it.props)}><it.icon size={15} /> {it.label}</Components.Generic.Menu.Item>
+  );
   return (
     <DragHandleMenu {...props}>
-      <Components.Generic.Menu.Label>Turn into</Components.Generic.Menu.Label>
-      {TURN_INTO.map(([label, type, p]) => (
-        <Components.Generic.Menu.Item key={label} onClick={() => { try { editor.updateBlock(props.block, { type, props: p }); } catch {} }}>{label}</Components.Generic.Menu.Item>
-      ))}
-      <Components.Generic.Menu.Divider />
-      <RemoveBlockItem {...props}>Delete</RemoveBlockItem>
+      <div className="tim">
+        <Components.Generic.Menu.Label>Turn into</Components.Generic.Menu.Label>
+        {TURN_INTO.map(it => it.sub ? (
+          <div className="tim-parent" key={it.label}>
+            <span className="tim-row"><it.icon size={15} /> {it.label}</span>
+            <ChevronRight size={12} className="tim-caret" />
+            <div className="tim-sub">{it.sub.map(leaf)}</div>
+          </div>
+        ) : leaf(it))}
+        <Components.Generic.Menu.Divider />
+        <Components.Generic.Menu.Item onClick={dup}><CopySimple size={15} /> Duplicate</Components.Generic.Menu.Item>
+        <RemoveBlockItem {...props}><span className="tim-danger"><Trash2 size={15} /> Delete</span></RemoveBlockItem>
+      </div>
     </DragHandleMenu>
+  );
+}
+// custom drag handle: identical to BlockNote's, but the dropdown's TOP aligns with the
+// handle (left-start) instead of being vertically centered on it
+function DragHandle(p) {
+  const Components = useComponentsContext();
+  return (
+    <Components.Generic.Menu.Root onOpenChange={(o) => { o ? p.freezeMenu() : p.unfreezeMenu(); }} position="left-start">
+      <Components.Generic.Menu.Trigger>
+        <Components.SideMenu.Button label="Open block menu" draggable={true} onDragStart={(e) => p.blockDragStart(e, p.block)} onDragEnd={p.blockDragEnd} className="bn-button" icon={<GripVertical size={24} />} />
+      </Components.Generic.Menu.Trigger>
+      <TurnIntoMenu block={p.block} />
+    </Components.Generic.Menu.Root>
   );
 }
 const looksLikeMarkdown = (t) =>
@@ -491,10 +639,14 @@ function Editor({ page, editable, pages, onChange, insertRef, me }) {
     collaboration: { provider, fragment: ydoc.getXmlFragment('document'), user: { name: me?.name || me?.email || 'Someone', color: userColor(me?.id) } },
     pasteHandler: ({ event, editor, defaultPasteHandler }) => {
       try {
+        // rich clipboard data (copied blocks, HTML from other apps) always takes the
+        // native path; only bare plain text gets the markdown treatment
+        const types = Array.from(event.clipboardData?.types || []);
+        if (types.includes('blocknote/html') || types.includes('text/html')) return defaultPasteHandler();
         const text = event.clipboardData?.getData('text/plain');
         if (text && looksLikeMarkdown(text)) {
           editor.tryParseMarkdownToBlocks(text).then(blocks => {
-            blocks = (blocks || []).filter(Boolean);
+            blocks = (blocks || []).filter(Boolean).filter(b => !(b.type === 'paragraph' && (!b.content || b.content.length === 0)));
             if (!blocks.length) return;
             const ref = editor.getTextCursorPosition?.().block || editor.document[editor.document.length - 1];
             const empty = ref && (!ref.content || (Array.isArray(ref.content) && ref.content.length === 0));
@@ -537,21 +689,385 @@ function Editor({ page, editable, pages, onChange, insertRef, me }) {
       icon: <PageIcon icon={p.icon} size={15} />,
       onItemClick: () => editor.insertInlineContent([{ type: 'pageLink', props: { pageId: p.id, title: p.title || 'Untitled', icon: p.icon || '📄' } }, ' ']),
     }));
-  const clickToEnd = (e) => {
-    if (!editor.isEditable) return;
-    if (e.target.closest('.bn-inline-content, .bn-side-menu, a, button, input, textarea, label, select, .page-mention, .callout-emoji, .ce-btn, .cdot, [contenteditable="false"]')) return;
-    if (!window.getSelection()?.isCollapsed) return;
-    const id = e.target.closest('[data-id]')?.getAttribute('data-id');
-    if (!id) return;
-    try { editor.setTextCursorPosition(id, 'end'); editor.focus(); } catch {}
+  const wrapRef = useRef(null);
+  const dragRef = useRef(null);
+  // Handle-drags are moved by US, not ProseMirror. PM's native drop picks the deepest
+  // slot and will split a paragraph mid-text (leaving a blank block) or nest into
+  // neighbors. On drop we cancel PM entirely and do a clean structural move: the
+  // dragged block(s) become siblings of the block nearest the drop point. Tab nests.
+  useEffect(() => {
+    const contentRect = (el) => (el.querySelector(':scope > .bn-block > .bn-block-content') || el.querySelector('.bn-block-content') || el).getBoundingClientRect();
+    const onDragStart = (e) => {
+      try {
+        const ed = wrapRef.current; if (!ed || !ed.contains(e.target)) return;
+        if (dragRef.current?.handle) return;                  // handle recorder already ran
+        const blocks = editor.getSelection()?.blocks;
+        if (!blocks || blocks.length < 2) return;             // inline text drags stay native
+        dragRef.current = { ids: blocks.map(b => b.id), handle: false };
+      } catch {}
+    };
+    const onDrop = (e) => {
+      const d = dragRef.current;
+      if (!d || e.synthetic) return;
+      if (!e.dataTransfer?.types?.includes('blocknote/html')) return;
+      dragRef.current = null;
+      const wrap = wrapRef.current; if (!wrap) return;
+      e.preventDefault(); e.stopPropagation();
+      // PM never sees this drop, so its drop-cursor line would linger: clear it now
+      try { editor.prosemirrorView?.dom?.dispatchEvent(new DragEvent('dragend', { bubbles: false })); } catch {}
+      // handle-drags keep the pointer LEFT of the text column, so accept drops anywhere
+      // over the page; only real app chrome cancels the move
+      if (e.target.closest?.('.sidebar, .clog, .inbox-pop, .search-box, .card')) return;
+      try {
+        const dropY = e.clientY;
+        const dragSet = new Set(d.ids);
+        const inDragSubtree = (el) => { let a = el; while (a) { if (dragSet.has(a.getAttribute?.('data-id'))) return true; a = a.parentElement?.closest?.('[data-id]'); } return false; };
+        const cands = [];
+        wrap.querySelectorAll('.bn-editor [data-id]').forEach(el => { if (!inDragSubtree(el)) cands.push({ el, r: contentRect(el) }); });
+        if (!cands.length) return;
+        // seam: after the last block whose row center is above the pointer (stable +
+        // predictable), else before the first
+        let ref = null, place = 'after';
+        for (const cd of cands) if ((cd.r.top + cd.r.bottom) / 2 < dropY) ref = cd;
+        if (!ref) { ref = cands[0]; place = 'before'; }
+        // at a subtree end, "after inner item" and "after its parent" are the same line;
+        // pick the depth whose indent is closest to the pointer X (Notion behavior)
+        if (place === 'after') {
+          const parentOf = (el) => el.parentElement?.closest?.('[data-id]');
+          const isLastChild = (el) => { let s = el.nextElementSibling; while (s && !(s.nodeType === 1 && s.hasAttribute('data-id'))) s = s.nextElementSibling; return !s; };
+          let el = ref.el;
+          while (true) {
+            const par = parentOf(el);
+            if (!par || !isLastChild(el) || inDragSubtree(par)) break;
+            if (Math.abs(contentRect(par).left - e.clientX) < Math.abs(contentRect(el).left - e.clientX)) el = par; else break;
+          }
+          ref = { el, r: contentRect(el) };
+        }
+        const refId = ref.el.getAttribute('data-id');
+        const blocks = d.ids.map(id => editor.getBlock(id)).filter(Boolean);
+        if (!blocks.length) return;
+        editor.removeBlocks(d.ids);
+        editor.insertBlocks(blocks, refId, place);
+        if (d.ids.length > 1) editor.setSelection(d.ids[0], d.ids[d.ids.length - 1]);
+        else editor.setTextCursorPosition(d.ids[0], 'end');
+        editor.focus();
+      } catch {}
+    };
+    const onDragEnd = () => setTimeout(() => { dragRef.current = null; }, 300);
+    window.addEventListener('dragstart', onDragStart, true);
+    window.addEventListener('drop', onDrop, true);
+    window.addEventListener('dragend', onDragEnd, true);
+    return () => { window.removeEventListener('dragstart', onDragStart, true); window.removeEventListener('drop', onDrop, true); window.removeEventListener('dragend', onDragEnd, true); };
+  }, [editor]);
+  // hover tint via a floating overlay OUTSIDE the editor DOM. Never mutate classes on
+  // ProseMirror-managed nodes: PM's mutation observer re-syncs on any change inside the
+  // editor and stomps the selection (broke click-to-place-caret, froze big pages).
+  const hlRef = useRef(null);
+  const hlLockRef = useRef(false);
+  const placeHl = (el, strong) => {
+    const root = wrapRef.current, ov = hlRef.current; if (!root || !ov) return;
+    if (!el) { ov.style.display = 'none'; ov.classList.remove('strong'); return; }
+    const c = el.querySelector(':scope > .bn-block > .bn-block-content') || el.querySelector('.bn-block-content') || el;
+    const r = c.getBoundingClientRect(), wr = root.getBoundingClientRect();
+    ov.classList.toggle('strong', !!strong);
+    ov.style.display = 'block';
+    // inset vertically so adjacent rows keep a visible gap; pad horizontally for breathing room
+    ov.style.left = (r.left - wr.left - 5) + 'px';
+    ov.style.top = (r.top - wr.top + 1.5) + 'px';
+    ov.style.width = (r.width + 10) + 'px';
+    ov.style.height = (r.height - 3) + 'px';
   };
+  const hlRoRef = useRef(null);
+  useEffect(() => {
+    const root = wrapRef.current; if (!root) return;
+    let cur = null;
+    // live re-measure: the box grows/shrinks as the hovered block changes height
+    // (Shift+Enter, typing wraps). Observing is safe; mutating editor DOM is not.
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
+      const lock = hlLockRef.current;
+      if (lock && lock !== true) placeHl(lock, true);
+      else if (cur) placeHl(cur, false);
+    }) : null;
+    hlRoRef.current = ro;
+    const over = (e) => {
+      const el = e.target.closest?.('[data-id]');
+      if (el === cur) return;
+      cur = el;
+      ro?.disconnect();
+      if (el) ro?.observe(el);
+      if (!hlLockRef.current) placeHl(el, false);
+    };
+    const out = () => { cur = null; ro?.disconnect(); if (!hlLockRef.current) placeHl(null); };
+    const onScroll = () => { if (!hlLockRef.current) placeHl(null); };
+    root.addEventListener('mouseover', over);
+    root.addEventListener('mouseleave', out);
+    document.addEventListener('scroll', onScroll, true);
+    return () => { ro?.disconnect(); root.removeEventListener('mouseover', over); root.removeEventListener('mouseleave', out); document.removeEventListener('scroll', onScroll, true); };
+  }, []);
+  // minimal code-block chrome: add a copy button next to the language picker
+  useEffect(() => {
+    const root = wrapRef.current; if (!root) return;
+    const ensure = () => {
+      root.querySelectorAll('.bn-block-content[data-content-type="codeBlock"]').forEach(cb => {
+        const bar = cb.querySelector(':scope > div');
+        if (!bar || bar.querySelector('.code-copy')) return;
+        const btn = document.createElement('button');
+        btn.className = 'code-copy'; btn.type = 'button'; btn.title = 'Copy code';
+        const ic = '<svg width="13" height="13" viewBox="0 0 256 256" fill="currentColor"><path d="M216,32H88a8,8,0,0,0-8,8V80H40a8,8,0,0,0-8,8V216a8,8,0,0,0,8,8H168a8,8,0,0,0,8-8V176h40a8,8,0,0,0,8-8V40A8,8,0,0,0,216,32ZM160,208H48V96H160Zm48-48H176V88a8,8,0,0,0-8-8H96V48H208Z"></path></svg>';
+        btn.innerHTML = ic + '<span>Copy</span>';
+        btn.onclick = (ev) => {
+          ev.preventDefault(); ev.stopPropagation();
+          navigator.clipboard?.writeText(cb.querySelector('pre')?.textContent || '').then(() => {
+            btn.classList.add('ok'); btn.innerHTML = ic + '<span>Copied</span>';
+            setTimeout(() => { btn.classList.remove('ok'); btn.innerHTML = ic + '<span>Copy</span>'; }, 1400);
+          }).catch(() => {});
+        };
+        bar.appendChild(btn);
+      });
+    };
+    ensure();
+    let raf = 0;
+    const mo = new MutationObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(ensure); });
+    mo.observe(root, { childList: true, subtree: true });
+    return () => { mo.disconnect(); cancelAnimationFrame(raf); };
+  }, [editor]);
+  // Notion-style box selection: drag from the background (gutters or blank space below
+  // the doc) to select whole blocks; release sets a real block selection, so native
+  // shortcuts apply (Mod+Shift+Up/Down moves the selection, Backspace deletes, Cmd+C copies)
+  const [box, setBox] = useState(null);
+  const marqueeRef = useRef(false);
+  const marqueeSelRef = useRef(null);
+  const startBox = (e) => {
+    if (!editor.isEditable || e.button !== 0) return;
+    const wrap = wrapRef.current; if (!wrap) return;
+    const docEl = wrap.closest('.doc');
+    const isWrap = e.target === wrap || e.target === docEl; // gutters + page margins
+    const isBlank = e.target.classList?.contains('bn-editor') && (() => {
+      const doc = editor.document; const last = doc[doc.length - 1];
+      const el = last && wrap.querySelector(`[data-id="${last.id}"]`);
+      return el ? e.clientY > el.getBoundingClientRect().bottom : true;
+    })();
+    if (!isWrap && !isBlank) return;
+    if (isBlank) e.preventDefault();
+    const wr = wrap.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY; let active = false;
+    let hits = []; // hit tint drawn in an overlay layer, never as classes on editor DOM
+    const tops = () => Array.from(wrap.querySelectorAll('.bn-editor > .bn-block-group > .bn-block-outer'));
+    const move = (ev) => {
+      if (!active && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+      active = true; marqueeRef.current = true;
+      const x1 = Math.min(sx, ev.clientX), x2 = Math.max(sx, ev.clientX), y1 = Math.min(sy, ev.clientY), y2 = Math.max(sy, ev.clientY);
+      setBox({ l: x1 - wr.left, t: y1 - wr.top, w: x2 - x1, h: y2 - y1 });
+      hits = [];
+      const layer = selLayerRef.current;
+      if (layer) layer.innerHTML = '';
+      tops().forEach(el => {
+        const r = el.getBoundingClientRect();
+        if (r.bottom > y1 && r.top < y2 && r.right > x1 && r.left < x2) {
+          hits.push(el.getAttribute('data-id'));
+          if (layer) { const d = document.createElement('div'); d.style.cssText = `left:${r.left - wr.left - 5}px;top:${r.top - wr.top + 1.5}px;width:${r.width + 10}px;height:${r.height - 3}px`; layer.appendChild(d); }
+        }
+      });
+      ev.preventDefault();
+    };
+    const up = () => {
+      document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
+      setBox(null);
+      if (!active || !hits.length) { if (selLayerRef.current) selLayerRef.current.innerHTML = ''; return; }
+      marqueeSelRef.current = hits.length > 1 ? hits.slice() : null;
+      if (hits.length === 1 && selLayerRef.current) selLayerRef.current.innerHTML = '';
+      try { hits.length === 1 ? editor.setTextCursorPosition(hits[0], 'start') : editor.setSelection(hits[0], hits[hits.length - 1]); editor.focus(); } catch {}
+    };
+    document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
+  };
+  // drag-select starting from the empty area right of a line: ProseMirror only moves the
+  // caret there, so run the selection drag ourselves from the position under the pointer
+  const rightDrag = (e) => {
+    if (!editor.isEditable || e.button !== 0) return;
+    const bc = e.target.closest?.('.bn-block-content'); if (!bc) return;
+    if (bc.dataset.contentType === 'codeBlock' || bc.dataset.contentType === 'table') return;
+    const inline = bc.querySelector(':scope .bn-inline-content'); if (!inline) return;
+    if (e.clientX <= inline.getBoundingClientRect().right + 2) return;
+    const view = editor.prosemirrorView; if (!view) return;
+    // clamp lookups into the text element at the pointer's line, otherwise ProseMirror
+    // resolves points in the blank zone to the START of the line
+    const posAt = (x, y) => {
+      const el = document.elementFromPoint(x, y);
+      const inl = el?.closest?.('.bn-block-content')?.querySelector(':scope .bn-inline-content');
+      if (inl) { const r = inl.getBoundingClientRect(); x = Math.max(r.left + 1, Math.min(x, r.right - 2)); y = Math.max(r.top + 2, Math.min(y, r.bottom - 2)); }
+      return view.posAtCoords({ left: x, top: y })?.pos;
+    };
+    const anchor = posAt(e.clientX, e.clientY); if (anchor == null) return;
+    e.preventDefault();
+    view.focus();
+    const setSel = (a, h) => { try { view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, a, h))); } catch {} };
+    setSel(anchor, anchor);
+    let lastH = anchor;
+    const move = (ev) => { const h = posAt(ev.clientX, ev.clientY); if (h != null && h !== lastH) { lastH = h; setSel(anchor, h); } };
+    const up = () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); };
+    document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
+  };
+  // click in the blank space below the doc starts a fresh paragraph (Notion behavior)
+  const clickBlank = (e) => {
+    if (!editor.isEditable) return;
+    if (marqueeRef.current) { marqueeRef.current = false; return; }
+    if (e.target !== e.currentTarget && !e.target.classList?.contains('bn-editor')) return;
+    try {
+      const doc = editor.document; const last = doc[doc.length - 1]; if (!last) return;
+      const el = wrapRef.current?.querySelector(`[data-id="${last.id}"]`);
+      if (el && e.clientY < el.getBoundingClientRect().bottom) return;
+      const empty = last.type === 'paragraph' && (!last.content || last.content.length === 0);
+      if (empty) editor.setTextCursorPosition(last.id, 'end');
+      else { const r = editor.insertBlocks([{ type: 'paragraph' }], last.id, 'after'); editor.setTextCursorPosition(r?.insertedBlocks?.[0]?.id || last.id, 'end'); }
+      editor.focus();
+    } catch {}
+  };
+  // highlight the block you're about to grab while hovering its handle
+  const hl = (id, on) => {
+    const el = on && id ? wrapRef.current?.querySelector(`[data-id="${id}"]`) : null;
+    hlLockRef.current = el || false;
+    if (el) { hlRoRef.current?.disconnect(); hlRoRef.current?.observe(el); }
+    placeHl(el, true);
+  };
+  // marquee can start from the page margins (outside editor-wrap), so listen at document level
+  const startBoxRef = useRef(startBox); startBoxRef.current = startBox;
+  useEffect(() => {
+    const h = (e) => startBoxRef.current(e);
+    document.addEventListener('pointerdown', h);
+    return () => document.removeEventListener('pointerdown', h);
+  }, []);
+  const selLayerRef = useRef(null);
+  // while a marquee-made block selection is alive, render Notion-style block tints
+  // instead of ProseMirror's per-character text highlight
+  useEffect(() => {
+    let raf = 0;
+    const same = (a, b) => a.length === b.length && a.every(x => b.includes(x));
+    const sync = () => {
+      const wrap = wrapRef.current, layer = selLayerRef.current; if (!wrap || !layer) return;
+      let ids = null;
+      try {
+        const bs = editor.getSelection()?.blocks;
+        const m = marqueeSelRef.current;
+        if (bs?.length > 1 && m?.length > 1 && same(bs.map(b => b.id), m)) ids = bs.map(b => b.id);
+      } catch {}
+      layer.innerHTML = '';
+      wrap.classList.toggle('blocksel', !!ids);
+      if (!ids) { if (!document.getSelection()?.rangeCount || document.getSelection().isCollapsed) marqueeSelRef.current = marqueeSelRef.current; return; }
+      const wr = wrap.getBoundingClientRect();
+      for (const id of ids) {
+        const el = wrap.querySelector(`[data-id="${id}"]`); if (!el) continue;
+        const cEl = el.querySelector(':scope > .bn-block > .bn-block-content') || el.querySelector('.bn-block-content') || el;
+        const cr = cEl.getBoundingClientRect(), orr = el.getBoundingClientRect();
+        const d = document.createElement('div');
+        d.style.cssText = `left:${cr.left - wr.left - 5}px;top:${orr.top - wr.top + 1.5}px;width:${cr.width + 10}px;height:${orr.height - 3}px`;
+        layer.appendChild(d);
+      }
+    };
+    const onSel = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(sync); };
+    document.addEventListener('selectionchange', onSel);
+    return () => { document.removeEventListener('selectionchange', onSel); cancelAnimationFrame(raf); };
+  }, [editor]);
+  // Notion-style right-click menu on blocks
+  const [ctx, setCtx] = useState(null);
+  const onCtxMenu = (e) => {
+    if (!editor.isEditable) return;
+    const blk = e.target.closest?.('[data-id]');
+    if (!blk || e.target.closest('.code-copy, select, a')) return;
+    e.preventDefault();
+    setCtx({ x: Math.min(e.clientX, window.innerWidth - 240), y: Math.min(e.clientY, window.innerHeight - 420), id: blk.getAttribute('data-id') });
+  };
+  const ctxAct = async (fn) => { setCtx(null); try { await fn(); } catch {} };
+  // the blocks a context action applies to: live multi-selection, else the remembered
+  // marquee set (right-click collapses the live one), else just the clicked block
+  const ctxBlocks = (id) => {
+    try { const bs = editor.getSelection()?.blocks; if (bs?.length > 1 && bs.some(b => b.id === id)) return bs; } catch {}
+    const m = marqueeSelRef.current;
+    if (m?.length > 1 && m.includes(id)) { const bs = m.map(x => editor.getBlock(x)).filter(Boolean); if (bs.length > 1) return bs; }
+    const b = editor.getBlock(id); return b ? [b] : [];
+  };
+  const ctxCursor = (id) => {
+    const bs = ctxBlocks(id);
+    try { bs.length > 1 ? editor.setSelection(bs[0].id, bs[bs.length - 1].id) : editor.setTextCursorPosition(id); } catch {}
+  };
+  const ctxStyle = (id, s) => ctxAct(() => {
+    const sel = editor.getSelection();
+    if (!sel?.blocks?.length && window.getSelection()?.isCollapsed) editor.setSelection(id, id);
+    editor.toggleStyles(s);
+    editor.focus();
+  });
+  const CtxItem = ({ icon: I, label, kbd, danger, onClick }) => (
+    <div className={'popmenu-item' + (danger ? ' danger' : '')} onClick={onClick}><I size={15} /> {label}{kbd && <span className="ctx-kbd">{kbd}</span>}</div>
+  );
   return (
-    <div className="editor-wrap" onClick={clickToEnd}>
+    <div className="editor-wrap" ref={wrapRef} onClick={clickBlank} onPointerDown={(e) => { if (e.button === 0) marqueeSelRef.current = null; rightDrag(e); }} onContextMenu={onCtxMenu}>
+    <div className="blk-hl" ref={hlRef} />
+    <div className="box-sel-layer" ref={selLayerRef} />
+    {box && <div className="box-rect" style={{ left: box.l, top: box.t, width: box.w, height: box.h }} />}
+    {ctx && createPortal(<>
+      <div className="picker-overlay" onClick={() => setCtx(null)} onContextMenu={(e) => { e.preventDefault(); setCtx(null); }} />
+      <div className="ctx-menu" style={{ left: ctx.x, top: ctx.y }}>
+        <div className="ctx-fmt">
+          <button title="Bold" onClick={() => ctxStyle(ctx.id, { bold: true })}><TextB size={15} weight="bold" /></button>
+          <button title="Italic" onClick={() => ctxStyle(ctx.id, { italic: true })}><TextItalic size={15} /></button>
+          <button title="Underline" onClick={() => ctxStyle(ctx.id, { underline: true })}><TextUnderline size={15} /></button>
+          <button title="Strikethrough" onClick={() => ctxStyle(ctx.id, { strike: true })}><TextStrikethrough size={15} /></button>
+          <button title="Inline code" onClick={() => ctxStyle(ctx.id, { code: true })}><CodeIcon size={15} /></button>
+        </div>
+        <div className="popmenu-sep" />
+        <CtxItem icon={Scissors} label="Cut" onClick={() => ctxAct(async () => { const bs = ctxBlocks(ctx.id); const md = await editor.blocksToMarkdownLossy(bs); await navigator.clipboard?.writeText(md); editor.removeBlocks(bs.map(b => b.id)); })} />
+        <CtxItem icon={CopySimple} label="Copy" onClick={() => ctxAct(async () => { const bs = ctxBlocks(ctx.id); const s = window.getSelection(); const txt = bs.length > 1 ? await editor.blocksToMarkdownLossy(bs) : (s && !s.isCollapsed ? s.toString() : await editor.blocksToMarkdownLossy(bs)); await navigator.clipboard?.writeText(txt); })} />
+        <CtxItem icon={ClipboardText} label="Paste below" onClick={() => ctxAct(async () => { const t = await navigator.clipboard?.readText(); if (!t) return; const blocks = (await editor.tryParseMarkdownToBlocks(t) || []).filter(Boolean); const bs = ctxBlocks(ctx.id); if (blocks.length) editor.insertBlocks(blocks, bs[bs.length - 1].id, 'after'); })} />
+        <div className="popmenu-sep" />
+        <div className="tim-parent popmenu-item" style={{ padding: '7px 12px' }}>
+          <span className="tim-row"><TextT size={15} /> Turn into</span>
+          <ChevronRight size={12} className="tim-caret" />
+          <div className="tim-sub">
+            {TURN_INTO.flatMap(it => it.sub ? it.sub : [it]).map(it => (
+              <div className="popmenu-item" key={it.label} onClick={() => ctxAct(() => ctxBlocks(ctx.id).forEach(b => { try { editor.updateBlock(b.id, { type: it.type, props: it.props }); } catch {} }))}><it.icon size={15} /> {it.label}</div>
+            ))}
+          </div>
+        </div>
+        <div className="popmenu-sep" />
+        <CtxItem icon={TextIndent} label="Indent" kbd="Tab" onClick={() => ctxAct(() => { ctxCursor(ctx.id); editor.nestBlock(); })} />
+        <CtxItem icon={TextOutdent} label="Un-indent" kbd="⇧Tab" onClick={() => ctxAct(() => { ctxCursor(ctx.id); editor.unnestBlock(); })} />
+        <CtxItem icon={ArrowUp} label="Move up" kbd="⌘⇧↑" onClick={() => ctxAct(() => { ctxCursor(ctx.id); editor.moveBlocksUp(); })} />
+        <CtxItem icon={ArrowDown} label="Move down" kbd="⌘⇧↓" onClick={() => ctxAct(() => { ctxCursor(ctx.id); editor.moveBlocksDown(); })} />
+        <div className="popmenu-sep" />
+        <CtxItem icon={CopySimple} label="Duplicate" onClick={() => ctxAct(() => { const bs = ctxBlocks(ctx.id); editor.insertBlocks(bs.map(stripIds), bs[bs.length - 1].id, 'after'); })} />
+        <CtxItem icon={Trash2} label="Delete" danger onClick={() => ctxAct(() => editor.removeBlocks(ctxBlocks(ctx.id).map(b => b.id)))} />
+      </div>
+    </>, document.body)}
     <BlockNoteView editor={editor} editable={editable} theme="dark" slashMenu={false} sideMenu={false} onChange={() => onChange(JSON.stringify(editor.document))}>
-      <SideMenuController sideMenu={(p) => <SideMenu {...p} dragHandleMenu={TurnIntoMenu} />} />
+      <SideMenuController sideMenu={(p) => (
+        <div ref={(el) => {
+            if (!el) return;
+            let dx = 0;
+            try {
+              const b = wrapRef.current?.querySelector(`[data-id="${p.block?.id}"] > .bn-block > .bn-block-content`);
+              const ed = wrapRef.current?.querySelector('.bn-editor');
+              if (b && ed) dx = Math.max(0, b.getBoundingClientRect().left - ed.getBoundingClientRect().left);
+            } catch {}
+            el.style.transform = dx > 2 ? `translateX(${dx}px)` : '';
+          }}
+          onMouseEnter={() => hl(p.block?.id, true)} onMouseLeave={() => hl(null, false)}
+          onDragStartCapture={() => {
+            if (p.block?.id) {
+              let ids = [p.block.id];
+              try { const bs = editor.getSelection()?.blocks; if (bs?.length > 1 && bs.some(b => b.id === p.block.id)) ids = bs.map(b => b.id); } catch {}
+              dragRef.current = { ids, handle: true };
+            }
+            hl(null, false);
+          }}>
+          <SideMenu {...p}><AddBlockButton {...p} /><DragHandle {...p} /></SideMenu>
+        </div>
+      )} />
       <SuggestionMenuController triggerCharacter="/" getItems={async (query) => filterSuggestionItems([
-        ...getDefaultReactSlashMenuItems(editor),
+        ...getDefaultReactSlashMenuItems(editor).filter(i => !['Image', 'Video', 'Audio', 'File'].includes(i.title)),
         { title: 'Callout', subtext: 'Tip box with an emoji', aliases: ['callout', 'tip', 'note', 'info', 'box', 'warning'], group: 'Basic blocks', icon: <span style={{ fontSize: 16 }}>💡</span>, onItemClick: () => insertOrUpdateBlock(editor, { type: 'callout' }) },
+        { title: 'Toggle', subtext: 'Collapsible section: title line, Tab content under it', aliases: ['toggle', 'collapse', 'collapsible', 'details', 'dropdown', 'fold'], group: 'Basic blocks', icon: <ChevronRight size={16} />, onItemClick: () => insertOrUpdateBlock(editor, { type: 'toggle' }) },
+        { title: 'Toggle heading', subtext: 'Heading-sized collapsible section', aliases: ['toggleheading', 'theading', 'collapsibleheading'], group: 'Basic blocks', icon: <ChevronRight size={16} weight="bold" />, onItemClick: () => insertOrUpdateBlock(editor, { type: 'toggle', props: { level: 2 } }) },
+        { title: 'Quote', subtext: 'Citation with an accent bar', aliases: ['quote', 'blockquote', 'citation'], group: 'Basic blocks', icon: <Quotes size={16} />, onItemClick: () => insertOrUpdateBlock(editor, { type: 'quote' }) },
+        { title: 'Divider', subtext: 'Horizontal rule', aliases: ['divider', 'hr', 'line', 'separator', 'rule'], group: 'Basic blocks', icon: <Minus size={16} />, onItemClick: () => insertOrUpdateBlock(editor, { type: 'divider' }) },
       ], query)} />
       <SuggestionMenuController triggerCharacter="#" getItems={pageItems} />
       <SuggestionMenuController triggerCharacter="@" getItems={pageItems} />
@@ -609,20 +1125,26 @@ function Settings({ me, setMe, currentWs, onWsChange, onLogout, onImported, onCl
         <div className="set-side">
           <div className="set-title">Settings</div>
           <div className={'set-tab' + (tab === 'account' ? ' on' : '')} onClick={() => setTab('account')}><User size={14} /> My account</div>
-          <div className={'set-tab' + (tab === 'members' ? ' on' : '')} onClick={() => setTab('members')}><Users size={14} /> Members</div>
+          <div className={'set-tab' + (tab === 'members' ? ' on' : '')} onClick={() => setTab('members')}><Users size={14} /> People</div>
           <div className={'set-tab' + (tab === 'trash' ? ' on' : '')} onClick={() => setTab('trash')}><Trash2 size={14} /> Trash</div>
           {me.is_admin === 1 && <div className={'set-tab' + (tab === 'workspace' ? ' on' : '')} onClick={() => setTab('workspace')}><SettingsIcon size={14} /> Workspace</div>}
           {me.is_admin === 1 && <div className={'set-tab' + (tab === 'data' ? ' on' : '')} onClick={() => setTab('data')}><BookOpen size={14} /> Import / Export</div>}
-          {me.is_admin === 1 && <div className={'set-tab' + (tab === 'users' ? ' on' : '')} onClick={() => setTab('users')}><Crown size={14} /> Users</div>}
+          <a className="set-brand" href="https://notebit.org" target="_blank" rel="noreferrer" title="notebit.org">
+            <svg width="15" height="15" viewBox="0 0 32 32" aria-hidden="true">
+              <g fill="currentColor"><rect x="1.5" y="1.5" width="6.5" height="6.5" rx="1.8"/><rect x="1.5" y="9" width="6.5" height="6.5" rx="1.8"/><rect x="1.5" y="16.5" width="6.5" height="6.5" rx="1.8"/><rect x="1.5" y="24" width="6.5" height="6.5" rx="1.8"/><rect x="24" y="9" width="6.5" height="6.5" rx="1.8"/><rect x="24" y="16.5" width="6.5" height="6.5" rx="1.8"/><rect x="24" y="24" width="6.5" height="6.5" rx="1.8"/><rect x="9" y="9" width="6.5" height="6.5" rx="1.8"/><rect x="16.5" y="16.5" width="6.5" height="6.5" rx="1.8"/></g>
+              <rect x="24.5" y="0.4" width="5.5" height="5.5" rx="1.6" fill="currentColor" opacity=".7" transform="rotate(18 27.25 3.15)"/>
+            </svg>
+            <span>NoteBit</span>
+          </a>
         </div>
         <div className="set-body">
           <X size={17} className="x abs" onClick={onClose} />
           {tab === 'account' && <Account me={me} setMe={setMe} onLogout={onLogout} />}
           {tab === 'trash' && <TrashView currentWs={currentWs} />}
-          {tab === 'members' && <Members me={me} currentWs={currentWs} />}
+          {tab === 'members' && <><Members me={me} currentWs={currentWs} />{me.is_admin === 1 && <AdminUsers me={me} />}</>}
           {tab === 'workspace' && <Workspaces currentWs={currentWs} onWsChange={onWsChange} />}
           {tab === 'data' && <><ImportPane currentWs={currentWs} onImported={onImported} /><ExportPane currentWs={currentWs} /></>}
-          {tab === 'users' && <AdminUsers me={me} />}
+
         </div>
       </div>
     </div>
@@ -633,12 +1155,18 @@ function UpdateNotice() {
   useEffect(() => { api('/update-check').then(setU).catch(() => setU({ current: APP_VERSION })); }, []);
   if (!u) return null;
   return (
+  <>
     <div className="upd">
       <span>NoteBit <b>v{u.current}</b></span>
       {u.updateAvailable
         ? <a className="upd-new" href={u.url} target="_blank" rel="noreferrer">Update to v{u.latest} →</a>
         : <span className="muted small">You're up to date</span>}
     </div>
+    <div className="upd">
+      <span className="muted small">Prefer managed hosting?</span>
+      <a className="upd-new" href="https://notebit.org" target="_blank" rel="noreferrer">NoteBit Cloud →</a>
+    </div>
+  </>
   );
 }
 function Account({ me, setMe, onLogout }) {
@@ -727,6 +1255,13 @@ function ImportPane({ currentWs, onImported }) {
     for (const f of files) {
       try {
         const text = await f.text();
+        if (/\.json$/i.test(f.name)) {
+          const obj = JSON.parse(text);
+          if (!String(obj?.format || '').startsWith('notebit-workspace')) throw new Error('not a NoteBit backup file');
+          const r = await api('/workspaces/' + currentWs.id + '/import-native', { method: 'POST', body: { pages: obj.pages } });
+          results.push({ name: f.name, ok: true, title: r.imported + ' pages from "' + (obj.name || 'backup') + '" (boards included)' });
+          continue;
+        }
         let blocks = await editor.tryParseMarkdownToBlocks(text);
         let title = f.name.replace(/\.(md|markdown|txt)$/i, '');
         if (blocks[0]?.type === 'heading' && blocks[0]?.props?.level === 1) {
@@ -744,8 +1279,8 @@ function ImportPane({ currentWs, onImported }) {
   return (
     <div className="set-pane">
       <h3>Import pages</h3>
-      <div className="muted small">Upload Markdown (<b>.md</b>) or text files — each one becomes a page in <b>{currentWs?.name}</b>. A leading <code>#&nbsp;Heading</code> becomes the page title.</div>
-      <input ref={fileRef} type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden onChange={onFiles} />
+      <div className="muted small">Drop a <b>.notebit.json</b> backup from another NoteBit instance (full migration: boards, cards, links) or Markdown (<b>.md</b>) files (each becomes a page). A leading <code>#&nbsp;Heading</code> becomes the page title.</div>
+      <input ref={fileRef} type="file" accept=".md,.markdown,.txt,.json,text/markdown,text/plain,application/json" multiple hidden onChange={onFiles} />
       <button className="mini gold" disabled={busy} style={{ alignSelf: 'flex-start' }} onClick={() => fileRef.current.click()}>{busy ? 'Importing…' : 'Choose files'}</button>
       {log.length > 0 && <div className="import-log">{log.map((r, i) => <div key={i} className={'imp-row' + (r.ok ? '' : ' err')}>{r.ok ? '✓ ' : '✕ '}{r.ok ? r.title : `${r.name} — ${r.error}`}</div>)}</div>}
     </div>
@@ -773,11 +1308,26 @@ function ExportPane({ currentWs }) {
       setTimeout(() => URL.revokeObjectURL(url), 2000);
     } catch (e) { /* ignore */ } finally { setBusy(false); }
   };
+  const exportNative = async () => {
+    if (!currentWs?.id) return;
+    setBusy(true);
+    try {
+      const pages = await api('/workspaces/' + currentWs.id + '/export');
+      const payload = { format: 'notebit-workspace@1', exported_from: location.host, name: currentWs.name, pages };
+      const blob = new Blob([JSON.stringify(payload, null, 1)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = (currentWs.name || 'workspace').replace(/[^a-z0-9]+/gi, '-') + '.notebit.json'; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch (e) {} finally { setBusy(false); }
+  };
   return (
     <div className="set-pane">
-      <h3>Export pages</h3>
-      <div className="muted small">Download every page in <b>{currentWs?.name}</b> as Markdown files in a .zip.</div>
-      <button className="mini gold" disabled={busy} style={{ alignSelf: 'flex-start' }} onClick={exportZip}>{busy ? 'Exporting…' : 'Export workspace (.zip)'}</button>
+      <h3>Export</h3>
+      <div className="muted small"><b>NoteBit backup</b> keeps everything: tree, boards, columns, cards, tags, links. Import it into any NoteBit instance for a full migration. The Markdown zip is for taking your notes elsewhere.</div>
+      <div className="row gap">
+        <button className="mini gold" disabled={busy} onClick={exportNative}>{busy ? 'Exporting…' : 'NoteBit backup (.json)'}</button>
+        <button className="mini" disabled={busy} onClick={exportZip}>{busy ? '…' : 'Markdown (.zip)'}</button>
+      </div>
     </div>
   );
 }
@@ -788,7 +1338,10 @@ function Workspaces({ currentWs, onWsChange }) {
   const [icon, setIcon] = useState(currentWs?.icon || 'ph:BookOpen');
   const [picker, setPicker] = useState(false);
   const [msg, setMsg] = useState('');
-  useEffect(() => { api('/admin/settings').then(setS).catch(() => {}); }, []);
+  const [ekey, setEkey] = useState('');
+  const [efrom, setEfrom] = useState('');
+  const [emsg, setEmsg] = useState('');
+  useEffect(() => { api('/admin/settings').then(r => { setS(r); setEfrom(r.mail_from || ''); }).catch(() => {}); }, []);
   useEffect(() => { setName(currentWs?.name || ''); setIcon(currentWs?.icon || 'ph:BookOpen'); }, [currentWs?.id]);
   if (!s) return null;
   const toggle = async () => { const r = await api('/admin/settings', { method: 'PUT', body: { allow_signup: !s.allow_signup } }); setS(r); };
@@ -805,6 +1358,20 @@ function Workspaces({ currentWs, onWsChange }) {
       </div>
       <div className="row between fld2"><div className="col"><b>Open sign-up</b><span className="muted small">Let anyone with the link create an account</span></div>
         <label className="sw"><input type="checkbox" checked={!!s.allow_signup} onChange={toggle} /><span /></label></div>
+      <div className="row between fld2"><div className="col"><b>Email invites</b>
+        <span className="muted small">{s.email_configured ? (s.email_key_source === 'env' ? 'Configured via environment.' : 'Configured.') + ' Invites are emailed automatically.' : 'Not configured. Invites still work, but you must share the link by hand.'}</span></div>
+        <span className={'role-badge'} style={{ color: s.email_configured ? '#5fc18a' : 'var(--muted)' }}>{s.email_configured ? 'On' : 'Off'}</span></div>
+      <div className="col" style={{ gap: 8 }}>
+        <label className="fld"><span>Resend API key <a href="https://resend.com/api-keys" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>(get one free)</a></span>
+          <input type="password" placeholder={s.email_key_source === 'app' ? 'saved, enter a new key to replace' : 're_...'} value={ekey} onChange={e => setEkey(e.target.value)} /></label>
+        <label className="fld"><span>From address (a domain you verified at Resend, or leave blank)</span>
+          <input placeholder="NoteBit <notes@yourdomain.com>" value={efrom} onChange={e => setEfrom(e.target.value)} /></label>
+        <div className="row gap">
+          <button className="mini gold" onClick={async () => { const body = { mail_from: efrom }; if (ekey.trim()) body.resend_key = ekey.trim(); const r = await api('/admin/settings', { method: 'PUT', body }); setS(r); setEkey(''); setEmsg('Saved ✓'); setTimeout(() => setEmsg(''), 2000); }}>Save email settings</button>
+          <button className="mini" disabled={!s.email_configured} onClick={async () => { setEmsg('Sending…'); try { const r = await api('/admin/test-email', { method: 'POST', body: {} }); setEmsg(r.ok ? '✓ ' + r.detail : '✗ ' + r.detail); } catch { setEmsg('✗ failed'); } }}>Send test email</button>
+          {emsg && <span className="muted small">{emsg}</span>}
+        </div>
+      </div>
       <h3>Danger zone</h3>
       <button className="btn-danger" style={{ alignSelf: 'flex-start' }} onClick={del}>Delete this workspace</button>
     </div>
@@ -880,14 +1447,13 @@ function Share({ pageId, onClose, origin }) {
               <div className="prow" key={m.id}>
                 <Avatar user={m} size={30} />
                 <span className="col grow"><b>{m.name || m.email}</b><span className="muted small">{m.email}</span></span>
-                {m.isOwner
-                  ? <span className="role-badge"><Crown size={13} weight="fill" /> Owner</span>
-                  : <span className="row gap8">
-                      <select className="role-sel" value={m.role} onChange={e => setRole(m.id, e.target.value)}>
-                        <option value="read">Read</option><option value="write">Write</option><option value="manage">Manage</option>
-                      </select>
-                      {m.pageRole && <button className="mini" title={`Reset to workspace role (${m.wsRole})`} onClick={() => resetRole(m.id)}>↺</button>}
-                    </span>}
+                <span className="row gap8">
+                  {m.isOwner && <span className="role-badge" title="Created this page"><Crown size={13} weight="fill" /></span>}
+                  <select className="role-sel" value={m.role} onChange={e => setRole(m.id, e.target.value)}>
+                    <option value="read">Read</option><option value="write">Write</option><option value="manage">Manage</option>
+                  </select>
+                  {m.pageRole && <button className="mini" title={m.isOwner ? 'Reset to full owner access' : `Reset to workspace role (${m.wsRole})`} onClick={() => resetRole(m.id)}>↺</button>}
+                </span>
               </div>
             ))}
           </div>
@@ -1008,22 +1574,53 @@ function Board({ page, pages, canManage, canContribute, onOpen, onAddCard, onMov
 }
 // ---------- knowledge graph ----------
 function nmPhysics(st, t) {
+  // positions are NORMALIZED (0..1 of container) so any size at any moment renders
+  // correctly; forces integrate in pixel space derived fresh each frame
   const { pos, nodes, edges, w, h } = st; const n = nodes.length;
-  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) { const a = pos[nodes[i].id], b = pos[nodes[j].id]; if (!a || !b) continue; let dx = a.x - b.x, dy = a.y - b.y, d = Math.sqrt(dx * dx + dy * dy) || 0.1; const f = 2400 / (d * d); dx /= d; dy /= d; a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f; }
-  for (const e of edges) { const a = pos[e.from], b = pos[e.to]; if (!a || !b) continue; let dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 0.1; const f = (d - 112) * 0.011; dx /= d; dy /= d; a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f; }
-  for (const nd of nodes) { const p = pos[nd.id]; if (!p || st.drag === nd.id) continue;
-    p.vx += (w / 2 - p.x) * 0.0006; p.vy += (h / 2 - p.y) * 0.0006;
+  if (!n || w < 120 || h < 120) return;
+  const X = {}, Y = {};
+  for (const nd of nodes) { const p = pos[nd.id]; if (p) { X[nd.id] = p.x * w; Y[nd.id] = p.y * h; } }
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+    const ai = nodes[i].id, bi = nodes[j].id, a = pos[ai], b = pos[bi]; if (!a || !b) continue;
+    let dx = X[ai] - X[bi], dy = Y[ai] - Y[bi], d = Math.sqrt(dx * dx + dy * dy) || 0.1;
+    const f = Math.min(8, 2400 / (d * d)); dx /= d; dy /= d;
+    a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
+  }
+  for (const e of edges) {
+    const a = pos[e.from], b = pos[e.to]; if (!a || !b) continue;
+    let dx = X[e.to] - X[e.from], dy = Y[e.to] - Y[e.from], d = Math.sqrt(dx * dx + dy * dy) || 0.1;
+    const f = (d - 112) * 0.011; dx /= d; dy /= d;
+    a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
+  }
+  for (const nd of nodes) {
+    const p = pos[nd.id]; if (!p || st.drag === nd.id) continue;
+    let px = X[nd.id], py = Y[nd.id];
+    p.vx += (w / 2 - px) * 0.0006; p.vy += (h / 2 - py) * 0.0006;
     if (t) { p.vx += Math.cos(t * 0.0002 + p.ph) * 0.02; p.vy += Math.sin(t * 0.0002 + p.ph * 1.3) * 0.02; }
-    p.x += Math.max(-3.2, Math.min(3.2, p.vx)); p.y += Math.max(-3.2, Math.min(3.2, p.vy));
+    px += Math.max(-3.2, Math.min(3.2, p.vx)); py += Math.max(-3.2, Math.min(3.2, p.vy));
     p.vx *= 0.94; p.vy *= 0.94;
-    p.x = Math.max(50, Math.min(w - 50, p.x)); p.y = Math.max(28, Math.min(h - 28, p.y));
+    px = Math.max(46, Math.min(w - 120, px)); py = Math.max(56, Math.min(h - 62, py));
+    p.x = px / w; p.y = py / h;
+  }
+  // keep the whole cloud in frame: ease it toward fit if it outgrows the box
+  let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+  for (const nd of nodes) { const p = pos[nd.id]; if (!p) continue; const px = p.x * w, py = p.y * h; if (px < minX) minX = px; if (px > maxX) maxX = px; if (py < minY) minY = py; if (py > maxY) maxY = py; }
+  const aw = w - 170, ah = h - 124, bw = maxX - minX, bh = maxY - minY;
+  if (n > 1 && (bw > aw || bh > ah)) {
+    const target = Math.min(aw / Math.max(bw, 1), ah / Math.max(bh, 1));
+    const s = 1 - (1 - target) * 0.18;
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    for (const nd of nodes) { const p = pos[nd.id]; if (!p || st.drag === nd.id) continue; p.x = (w / 2 + (p.x * w - cx) * s) / w; p.y = (h / 2 + (p.y * h - cy) * s) / h; }
   }
 }
 function nmPaint(st, nodeEls, edgeEls) {
-  for (const nd of st.nodes) { const p = st.pos[nd.id], el = nodeEls[nd.id]; if (el && p) el.style.transform = `translate(${p.x}px,${p.y}px) translate(-50%,-50%)`; }
-  st.edges.forEach((e, i) => { const l = edgeEls[i], a = st.pos[e.from], b = st.pos[e.to]; if (l && a && b) { l.setAttribute('x1', a.x); l.setAttribute('y1', a.y); l.setAttribute('x2', b.x); l.setAttribute('y2', b.y); } });
+  const { w, h } = st;
+  for (const nd of st.nodes) { const p = st.pos[nd.id], el = nodeEls[nd.id]; if (el && p) el.style.transform = `translate(${p.x * w}px,${p.y * h}px) translate(-50%,-50%)`; }
+  st.edges.forEach((e, i) => { const l = edgeEls[i], a = st.pos[e.from], b = st.pos[e.to]; if (l && a && b) { l.setAttribute('x1', a.x * w); l.setAttribute('y1', a.y * h); l.setAttribute('x2', b.x * w); l.setAttribute('y2', b.y * h); } });
 }
-function NodeMap({ workspace, onOpen }) {
+function NodeMap({ workspace, onOpen, hiddenTags }) {
+  const hidden = hiddenTags || new Set();
+  const hiddenKey = [...hidden].sort().join(',');
   const [graph, setGraph] = useState(null);
   const [hover, setHover] = useState(null);
   const wrapRef = useRef();
@@ -1031,38 +1628,50 @@ function NodeMap({ workspace, onOpen }) {
   const edgeEls = useRef([]);
   const S = useRef({ pos: {}, nodes: [], edges: [], w: 820, h: 460, drag: null, moved: false, raf: 0 });
   useEffect(() => { api('/workspaces/' + workspace.id + '/graph').then(setGraph).catch(() => setGraph({ nodes: [], edges: [] })); }, [workspace.id]);
+  const visNodes = useMemo(() => !graph ? [] : graph.nodes.filter(nd => !(nd.tags || []).some(t => hidden.has(t))), [graph, hiddenKey]);
+  const visEdges = useMemo(() => { if (!graph) return []; const ids = new Set(visNodes.map(n => n.id)); return graph.edges.filter(e => ids.has(e.from) && ids.has(e.to)); }, [graph, visNodes]);
   useEffect(() => {
-    if (!graph || !graph.nodes.length) return;
+    if (!graph || !visNodes.length) return;
     const st = S.current; st.w = wrapRef.current?.clientWidth || 820; st.h = wrapRef.current?.clientHeight || 460;
-    const nodes = graph.nodes, n = nodes.length;
-    nodes.forEach((nd, i) => { if (!st.pos[nd.id]) { const a = (i / n) * Math.PI * 2, R = Math.min(st.w, st.h) / 2.5; st.pos[nd.id] = { x: st.w / 2 + Math.cos(a) * R, y: st.h / 2 + Math.sin(a) * R, vx: 0, vy: 0, ph: Math.random() * 6.28 }; } });
-    st.nodes = nodes; st.edges = graph.edges.filter(e => st.pos[e.from] && st.pos[e.to]); st.drag = null;
+    const nodes = visNodes, n = nodes.length;
+    nodes.forEach((nd, i) => { if (!st.pos[nd.id]) { const a = (i / n) * Math.PI * 2, R = Math.min(st.w, st.h) / 2.5; st.pos[nd.id] = { x: (st.w / 2 + Math.cos(a) * R) / st.w, y: (st.h / 2 + Math.sin(a) * R) / st.h, vx: 0, vy: 0, ph: Math.random() * 6.28 }; } });
+    st.nodes = nodes; st.edges = visEdges.filter(e => st.pos[e.from] && st.pos[e.to]); st.drag = null;
     for (let it = 0; it < 160; it++) nmPhysics(st, 0);
-    const frame = (t) => { nmPhysics(st, t); nmPaint(st, nodeEls.current, edgeEls.current); st.raf = requestAnimationFrame(frame); };
+    const frame = (t) => { const el = wrapRef.current; if (el) { st.w = el.clientWidth || st.w; st.h = el.clientHeight || st.h; } nmPhysics(st, t); nmPaint(st, nodeEls.current, edgeEls.current); st.raf = requestAnimationFrame(frame); };
     cancelAnimationFrame(st.raf); st.raf = requestAnimationFrame(frame);
-    const onResize = () => { if (wrapRef.current) { st.w = wrapRef.current.clientWidth; st.h = wrapRef.current.clientHeight; } };
+    const onResize = () => { if (wrapRef.current) { st.w = wrapRef.current.clientWidth || st.w; st.h = wrapRef.current.clientHeight || st.h; } };
     window.addEventListener('resize', onResize);
-    return () => { cancelAnimationFrame(st.raf); window.removeEventListener('resize', onResize); };
-  }, [graph]);
+    const ro = typeof ResizeObserver !== 'undefined' && wrapRef.current ? new ResizeObserver(onResize) : null;
+    if (ro) ro.observe(wrapRef.current);
+    return () => { cancelAnimationFrame(st.raf); window.removeEventListener('resize', onResize); ro?.disconnect(); };
+  }, [graph, hiddenKey]);
   const onDown = (id, e) => {
     if (e.button != null && e.button !== 0) return;
     e.preventDefault();
     const st = S.current; st.drag = id; st.moved = false;
     const rect = wrapRef.current.getBoundingClientRect();
-    const move = (ev) => { st.moved = true; const p = st.pos[id]; if (!p) return; p.x = Math.max(50, Math.min(st.w - 50, ev.clientX - rect.left)); p.y = Math.max(28, Math.min(st.h - 28, ev.clientY - rect.top)); p.vx = 0; p.vy = 0; };
+    const move = (ev) => { st.moved = true; const p = st.pos[id]; if (!p) return; p.x = Math.max(46, Math.min(st.w - 120, ev.clientX - rect.left)) / st.w; p.y = Math.max(56, Math.min(st.h - 62, ev.clientY - rect.top)) / st.h; p.vx = 0; p.vy = 0; };
     const up = () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); const moved = st.moved; st.drag = null; if (!moved) onOpen(id); };
     document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
   };
   if (!graph) return <div className="nodemap loading muted small">Building map…</div>;
   if (!graph.nodes.length) return null;
-  const linked = (id) => hover && (hover === id || graph.edges.some(e => (e.from === hover && e.to === id) || (e.to === hover && e.from === id)));
+  const linked = (id) => hover && (hover === id || visEdges.some(e => (e.from === hover && e.to === id) || (e.to === hover && e.from === id)));
+  // Obsidian-style sizing: nodes grow with their connection count, so hub pages read as hubs
+  const degree = {}, rootOf = {};
+  visNodes.forEach(n => { rootOf[n.id] = !!n.root; });
+  visEdges.forEach(e => { degree[e.from] = (degree[e.from] || 0) + 1; degree[e.to] = (degree[e.to] || 0) + 1; });
+  // roots anchor the map: big by right, links add growth; children never outgrow roots
+  const sizeOf = (id) => rootOf[id]
+    ? Math.min(1.95, 1.5 + Math.sqrt(degree[id] || 0) * 0.08)
+    : Math.min(1.4, 1 + Math.sqrt(degree[id] || 0) * 0.13);
   return (
     <div className="nodemap" ref={wrapRef}>
       <svg className="nm-edges" width="100%" height="100%">
-        {graph.edges.map((e, i) => { const on = hover && (e.from === hover || e.to === hover); return <line key={i} ref={el => (edgeEls.current[i] = el)} className={'nm-edge ' + e.kind + (on ? ' on' : hover ? ' dim' : '')} />; })}
+        {visEdges.map((e, i) => { const on = hover && (e.from === hover || e.to === hover); return <line key={e.from + e.to} ref={el => (edgeEls.current[i] = el)} className={'nm-edge ' + e.kind + (on ? ' on' : hover ? ' dim' : '')} />; })}
       </svg>
-      {graph.nodes.map(nd => { const active = !hover || linked(nd.id); return (
-        <div key={nd.id} ref={el => (nodeEls.current[nd.id] = el)} className={'nm-node' + (active ? '' : ' dim') + (hover === nd.id ? ' hl' : '')}
+      {visNodes.map(nd => { const active = !hover || linked(nd.id); const s = sizeOf(nd.id); return (
+        <div key={nd.id} ref={el => (nodeEls.current[nd.id] = el)} className={'nm-node' + (active ? '' : ' dim') + (hover === nd.id ? ' hl' : '') + (nd.root ? ' hub' : '')} style={{ '--ns': s }}
           onMouseEnter={() => setHover(nd.id)} onMouseLeave={() => setHover(null)} onPointerDown={e => onDown(nd.id, e)} title={nd.title || 'Untitled'}>
           <span className="nm-dot"><PageIcon icon={nd.icon} size={18} /></span>
           <span className="nm-label">{nd.title || 'Untitled'}</span>
@@ -1075,7 +1684,9 @@ function WorkspaceHome({ workspace, pages, canManage, onOpen, onNewDoc, onNewBoa
   const boards = new Set(pages.filter(p => p.view === 'board').map(p => p.id));
   const list = pages.filter(p => !(p.parent_id && boards.has(p.parent_id)));
   const [tags, setTags] = useState([]);
-  useEffect(() => { api('/tags?workspace=' + workspace.id).then(setTags).catch(() => {}); }, [workspace.id]);
+  const [hiddenTags, setHiddenTags] = useState(() => new Set());
+  const toggleTag = (name) => setHiddenTags(s => { const n = new Set(s); const k = name.toLowerCase(); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  useEffect(() => { api('/tags?workspace=' + workspace.id).then(setTags).catch(() => {}); setHiddenTags(new Set()); }, [workspace.id]);
   return (
     <div className="ws-home">
       <div className="ws-home-head">
@@ -1083,8 +1694,8 @@ function WorkspaceHome({ workspace, pages, canManage, onOpen, onNewDoc, onNewBoa
         <div className="col grow"><div className="ws-home-title">{workspace.name}</div><div className="muted small">{list.length} page{list.length === 1 ? '' : 's'}</div></div>
         {canManage && <div className="row gap"><button className="btn-soft" onClick={onNewDoc}><Pencil size={14} /> New doc</button><button className="btn-soft" onClick={onNewBoard}><BoardGlyph size={14} /> New board</button></div>}
       </div>
-      {tags.length > 0 && <div className="ws-tags">{tags.slice(0, 28).map(t => <span className="tag clickable" key={t.name} style={{ '--tc': t.color || tagColor(t.name) }} onClick={() => onTagClick && onTagClick(t.name, t.color)}>{t.name}<span className="ws-tag-n">{t.count}</span></span>)}</div>}
-      <NodeMap workspace={workspace} onOpen={onOpen} />
+      {tags.length > 0 && <div className="ws-tags">{tags.slice(0, 28).map(t => { const off = hiddenTags.has(t.name.toLowerCase()); return <span className={'tag clickable' + (off ? ' off' : '')} key={t.name} style={{ '--tc': t.color || tagColor(t.name) }} title={off ? 'Show these pages in the graph' : 'Hide these pages from the graph'} onClick={() => toggleTag(t.name)}>{t.name}<span className="ws-tag-n">{t.count}</span></span>; })}</div>}
+      <NodeMap workspace={workspace} onOpen={onOpen} hiddenTags={hiddenTags} />
     </div>
   );
 }
@@ -1104,16 +1715,40 @@ function TagView({ tag, color, workspace, onOpen, onClose }) {
   );
 }
 const fmtDate = (s) => { try { return new Date(String(s).replace(' ', 'T') + 'Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return ''; } };
-function PageMenu({ page, canManage, onLock, onDelete }) {
+function PageMenu({ page, canManage, onLock, onDelete, onLog }) {
   return (
     <Popover width={226} align="right" trigger={<button className="icon-btn" title="Page options"><DotsThree size={20} weight="bold" /></button>}>
       {(close) => <>
         <div className="popmenu-info">Edited {fmtDate(page.updated_at)}{page.is_public ? <span className="pm-pub"><Globe size={11} /> Published</span> : null}</div>
+        <div className="popmenu-item" onClick={() => { close(); onLog(); }}><ClockCounterClockwise size={15} /> Changelog</div>
         {canManage && <div className="popmenu-item" onClick={() => { onLock(); close(); }}><span className="lock-ico" key={page.locked ? 'l' : 'u'}>{page.locked ? <Lock size={15} weight="fill" /> : <LockOpen size={15} weight="fill" />}</span> {page.locked ? 'Unlock page' : 'Lock (read-only)'}</div>}
         {page.is_public && <div className="popmenu-item" onClick={() => { navigator.clipboard?.writeText(location.origin + '/p/' + page.id).catch(() => {}); close(); }}><LinkSimple size={15} /> Copy public link</div>}
         {canManage && <><div className="popmenu-sep" /><div className="popmenu-item danger" onClick={() => { close(); onDelete(); }}><Trash2 size={15} /> Delete page</div></>}
       </>}
     </Popover>
+  );
+}
+function Changelog({ pageId, onClose }) {
+  const [items, setItems] = useState(null);
+  useEffect(() => { setItems(null); api('/pages/' + pageId + '/log').then(setItems).catch(() => setItems([])); }, [pageId]);
+  return (
+    <div className="clog">
+      <div className="clog-head"><ClockCounterClockwise size={16} /> Changelog<span className="grow" /><X size={16} className="x" onClick={onClose} /></div>
+      <div className="clog-list">
+        {items === null && <div className="muted small clog-empty">Loading…</div>}
+        {items && items.length === 0 && <div className="muted small clog-empty">No activity yet. Edits, renames, and moves will show up here.</div>}
+        {(items || []).map(l => (
+          <div className="clog-item" key={l.id}>
+            <span className={'clog-act a' + (l.act === '+' ? 'add' : l.act === '-' ? 'del' : 'mod')}>{l.act === '-' ? '−' : l.act}</span>
+            <Avatar user={l.user} size={24} />
+            <div className="clog-main">
+              <div className="clog-line"><b>{l.user.name}</b> {l.detail}</div>
+              <div className="muted" style={{ fontSize: 11 }}>{fmtWhen(l.created_at)}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 function fmtWhen(s) { try { const d = new Date(String(s).replace(' ', 'T') + 'Z'); const sec = (Date.now() - d) / 1000; if (sec < 60) return 'just now'; if (sec < 3600) return Math.floor(sec / 60) + 'm ago'; if (sec < 86400) return Math.floor(sec / 3600) + 'h ago'; if (sec < 604800) return Math.floor(sec / 86400) + 'd ago'; return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); } catch { return ''; } }
@@ -1125,12 +1760,17 @@ function Comments({ pageId, members, me }) {
   const [mentions, setMentions] = useState([]);
   const [mq, setMq] = useState(null);
   const ta = useRef();
+  const [composing, setComposing] = useState(false);
   const load = () => api('/pages/' + pageId + '/comments').then(setList).catch(() => setList([]));
-  useEffect(() => { setText(''); setMentions([]); load(); }, [pageId]);
+  useEffect(() => { setText(''); setMentions([]); setComposing(false); load(); }, [pageId]);
+  useEffect(() => { if (composing) ta.current?.focus(); }, [composing]);
   const onChange = (e) => { setText(e.target.value); const m = e.target.value.slice(0, e.target.selectionStart).match(/@(\w*)$/); setMq(m ? m[1].toLowerCase() : null); };
   const pick = (mem) => { const nm = (mem.name || mem.email).split(' ')[0]; const caret = ta.current.selectionStart; const before = text.slice(0, caret).replace(/@(\w*)$/, '@' + nm + ' '); setText(before + text.slice(caret)); setMentions(ms => ms.find(x => x.id === mem.id) ? ms : [...ms, { id: mem.id, name: nm }]); setMq(null); setTimeout(() => ta.current?.focus(), 0); };
   const post = async () => { const body = text.trim(); if (!body) return; const ids = mentions.filter(m => body.includes('@' + m.name)).map(m => m.id); try { await api('/pages/' + pageId + '/comments', { method: 'POST', body: { body, mentions: ids } }); } catch {} setText(''); setMentions([]); load(); };
   const matches = mq != null ? members.filter(m => m.id !== me.id && (m.name || m.email).toLowerCase().includes(mq)).slice(0, 6) : [];
+  if (!list.length && !composing) return (
+    <div className="comments"><div className="cm-mini" onClick={() => setComposing(true)}><ChatCircle size={15} /> Add a comment</div></div>
+  );
   return (
     <div className="comments">
       <div className="cm-head"><ChatCircle size={16} weight="fill" /> Comments{list.length ? <span className="muted small"> {list.length}</span> : null}</div>
@@ -1191,6 +1831,7 @@ function Inbox({ onOpen }) {
 function Workspace({ me, setMe, onLogout }) {
   const confirm = useConfirm();
   const [pages, setPages] = useState([]);
+  useEffect(() => { feedPageMeta(pages); }, [pages]);
   const [workspaces, setWorkspaces] = useState([]);
   const [currentWsId, setCurrentWsId] = useState(() => localStorage.getItem('wsId') || null);
   const [wsPicker, setWsPicker] = useState(false);
@@ -1198,6 +1839,7 @@ function Workspace({ me, setMe, onLogout }) {
   const [wsModal, setWsModal] = useState(false);
   const [users, setUsers] = useState([]);
   const [currentId, setCurrentId] = useState(null);
+  const currentIdRef = useRef(null); currentIdRef.current = currentId;
   const popRef = useRef(false);
   useEffect(() => {
     history.replaceState({ pageId: currentId }, '');
@@ -1212,12 +1854,36 @@ function Workspace({ me, setMe, onLogout }) {
   }, [currentId]);
   const [page, setPage] = useState(null);
   const [sharing, setSharing] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
   const [tagFilter, setTagFilter] = useState(null);
   const [settings, setSettings] = useState(false);
   const [searching, setSearching] = useState(false);
   const [iconPicker, setIconPicker] = useState(false);
   const [backlinks, setBacklinks] = useState([]);
-  const [sidebar, setSidebar] = useState(true);
+  const [blOpen, setBlOpen] = useState(false);
+  // per-user UI prefs (tree collapse, sidebar open/width) saved to the account, debounced
+  const prefs = useMemo(() => { try { return JSON.parse(me.prefs || '{}'); } catch { return {}; } }, []);
+  const prefsRef = useRef(prefs);
+  const prefTimer = useRef(null);
+  const savePref = (patch) => {
+    prefsRef.current = { ...prefsRef.current, ...patch };
+    clearTimeout(prefTimer.current);
+    prefTimer.current = setTimeout(() => api('/me', { method: 'PUT', body: { prefs: prefsRef.current } }).catch(() => {}), 700);
+  };
+  const [sidebar, setSidebar] = useState(prefs.sidebar !== false);
+  const [sbWidth, setSbWidth] = useState(() => Math.max(200, Math.min(480, prefs.sbWidth || 260)));
+  const startSbResize = (e) => {
+    e.preventDefault();
+    const startX = e.clientX, startW = sbWidth;
+    const move = (ev) => setSbWidth(Math.max(200, Math.min(480, startW + ev.clientX - startX)));
+    const up = (ev) => {
+      document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
+      document.body.classList.remove('sb-resizing');
+      savePref({ sbWidth: Math.max(200, Math.min(480, startW + ev.clientX - startX)) });
+    };
+    document.body.classList.add('sb-resizing');
+    document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
+  };
   const saveTimer = useRef(null);
   const editorInsertRef = useRef(null);
   const coverInputRef = useRef(null);
@@ -1242,8 +1908,19 @@ function Workspace({ me, setMe, onLogout }) {
     return { doc, provider, map: doc.getMap('tree') };
   }, [currentWsId]);
   useEffect(() => () => { if (treeSync) { treeSync.provider.destroy(); treeSync.doc.destroy(); } }, [treeSync]);
-  useEffect(() => { if (!treeSync) return; const obs = () => refreshTree(); treeSync.map.observe(obs); return () => { try { treeSync.map.unobserve(obs); } catch {} }; }, [treeSync]);
+  useEffect(() => {
+    if (!treeSync) return;
+    const obs = (e) => {
+      refreshTree();
+      // live page-meta refresh: if someone bumps the page we're viewing (lock/unlock,
+      // publish, etc.), refetch it so read-only state updates without a reload
+      try { const cid = currentIdRef.current; if (cid && e?.keysChanged?.has('p:' + cid)) api('/pages/' + cid).then(setPage).catch(() => {}); } catch {}
+    };
+    treeSync.map.observe(obs);
+    return () => { try { treeSync.map.unobserve(obs); } catch {} };
+  }, [treeSync]);
   const bumpTree = () => { try { if (treeSync) treeSync.map.set('v', (treeSync.map.get('v') || 0) + 1); } catch {} };
+  const bumpPage = (id) => { try { if (treeSync) treeSync.map.set('p:' + id, (treeSync.map.get('p:' + id) || 0) + 1); } catch {} };
   const switchWs = (id) => { localStorage.setItem('wsId', id); setCurrentWsId(id); setCurrentId(null); setWsMenu(false); };
   const createWs = async ({ name, icon }) => { const w = await api('/workspaces', { method: 'POST', body: { name, icon } }); await loadWs(); switchWs(w.id); setWsModal(false); };
   useEffect(() => { loadWs(); api('/users').then(setUsers).catch(() => {}); }, []);
@@ -1316,12 +1993,13 @@ function Workspace({ me, setMe, onLogout }) {
     await api('/pages/' + cardId, { method: 'PUT', body: { parent_id: columnId, position } }); bumpTree();
   };
   const setListCards = (v) => { setPage(pg => ({ ...pg, list_cards: v ? 1 : 0 })); save({ list_cards: v }); bumpTree(); };
-  const setLocked = async (v) => { setPage(pg => ({ ...pg, locked: v ? 1 : 0, can_edit: v ? canManage : true })); await api('/pages/' + page.id, { method: 'PUT', body: { locked: v } }); bumpTree(); api('/pages/' + page.id).then(setPage).catch(() => {}); };
+  const setLocked = async (v) => { setPage(pg => ({ ...pg, locked: v ? 1 : 0, can_edit: v ? canManage : true })); await api('/pages/' + page.id, { method: 'PUT', body: { locked: v } }); bumpTree(); bumpPage(page.id); api('/pages/' + page.id).then(setPage).catch(() => {}); };
   const tags = page ? normTags(parseJSON(page.tags, [])) : [];
 
   return (
     <div className="app">
-      <aside className="sidebar" style={{ display: sidebar ? 'flex' : 'none' }}>
+      <aside className="sidebar" style={{ display: sidebar ? 'flex' : 'none', width: sbWidth, minWidth: sbWidth }}>
+        <div className="sb-resize" onPointerDown={startSbResize} title="Drag to resize" />
         <div className="sidebar-head">
           <div className="row between">
             <div className="brand">
@@ -1343,13 +2021,13 @@ function Workspace({ me, setMe, onLogout }) {
             <span className="row" style={{ gap: 2 }}>
               <Inbox onOpen={setCurrentId} />
               <button className="icon-btn" onClick={() => setSearching(true)} title="Search (⌘K)"><SearchIcon size={18} /></button>
-              <button className="icon-btn" onClick={() => setSidebar(false)} title="Collapse sidebar"><Menu size={18} /></button>
+              <button className="icon-btn" onClick={() => { setSidebar(false); savePref({ sidebar: false }); }} title="Collapse sidebar"><Menu size={18} /></button>
             </span>
           </div>
         </div>
         <div className="tree-scroll">
           <div className={'root-node' + (!currentId ? ' on' : '')} onClick={() => setCurrentId(null)} title="Workspace overview & map"><Share2 size={17} /><span>Overview</span></div>
-          <Tree pages={pages} currentId={currentId} onOpen={setCurrentId} onNew={newPage} onDelete={del} onMove={move} onLink={onLink} canManage={canManage} />
+          <Tree pages={pages} currentId={currentId} onOpen={setCurrentId} onNew={newPage} onDelete={del} onMove={move} onLink={onLink} canManage={canManage} collapsedInit={prefs.treeCollapsed} onCollapse={(ids) => savePref({ treeCollapsed: ids })} />
           {canManage && <div className="newpage-wrap">
             <button className="newpage" onClick={() => setTplMenu(v => !v)}><Plus size={16} /> New page</button>
             {tplMenu && <>
@@ -1368,7 +2046,7 @@ function Workspace({ me, setMe, onLogout }) {
           <Avatar user={me} size={30} /><span className="who">{me.name || me.email}{me.is_admin ? ' ★' : ''}</span><SettingsIcon size={17} className="cog" />
         </div>
       </aside>
-      {!sidebar && <button className="reopen-btn" onClick={() => setSidebar(true)} title="Open sidebar"><Menu size={18} /></button>}
+      {!sidebar && <button className="reopen-btn" onClick={() => { setSidebar(true); savePref({ sidebar: true }); }} title="Open sidebar"><Menu size={18} /></button>}
       <main className={'main' + (sidebar ? '' : ' no-sidebar')}>
         {!page && (pages.length === 0
           ? <div className="empty-home">
@@ -1393,7 +2071,7 @@ function Workspace({ me, setMe, onLogout }) {
                 {!page.can_edit && !page.locked && <span className="chip-mini"><Eye size={11} /> View only</span>}
                 <FacePile members={wsMembers} onClick={() => page.can_admin && setSharing(true)} />
                 {page.can_admin && <button className="btn-share" onClick={() => setSharing(true)}><Share2 size={13} /> Share</button>}
-                <PageMenu page={page} canManage={page.can_admin} onLock={() => setLocked(!page.locked)} onDelete={async () => { if (await confirm('Delete this page? It moves to Trash.', { danger: true, confirmLabel: 'Delete page' })) { const parent = page.parent_id; await api('/pages/' + page.id, { method: 'DELETE' }); setCurrentId(parent || null); refreshTree(); bumpTree(); } }} />
+                <PageMenu page={page} canManage={page.can_admin} onLog={() => setLogOpen(true)} onLock={() => setLocked(!page.locked)} onDelete={async () => { if (await confirm('Delete this page? It moves to Trash.', { danger: true, confirmLabel: 'Delete page' })) { const parent = page.parent_id; await api('/pages/' + page.id, { method: 'DELETE' }); setCurrentId(parent || null); refreshTree(); bumpTree(); } }} />
               </div>
             </div>
             <input ref={coverInputRef} type="file" accept="image/*" hidden onChange={pickCover} />
@@ -1423,8 +2101,8 @@ function Workspace({ me, setMe, onLogout }) {
                 <Properties tags={tags} editable={!!page.can_edit} workspace={currentWsId} onTagClick={(name, color) => setTagFilter({ name, color })} onChange={(t) => { setPage({ ...page, tags: JSON.stringify(t) }); save({ tags: t }); }} />
                 <Editor page={page} editable={!!page.can_edit} pages={pages} insertRef={editorInsertRef} me={me} onChange={(content) => save({ content })} />
                 {backlinks.length > 0 && <div className="backlinks">
-                  <div className="bl-head">Linked references</div>
-                  {backlinks.map(b => <div className="bl" key={b.id} onClick={() => setCurrentId(b.id)}><PageIcon icon={b.icon} size={14} /><span>{b.title || 'Untitled'}</span></div>)}
+                  <div className="bl-head clickable" onClick={() => setBlOpen(v => !v)}>{blOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />} Linked references <span className="muted">({backlinks.length})</span></div>
+                  {blOpen && backlinks.map(b => <div className="bl" key={b.id} onClick={() => setCurrentId(b.id)}><PageIcon icon={b.icon} size={14} /><span>{b.title || 'Untitled'}</span></div>)}
                 </div>}
                 </>}
                 <Comments pageId={page.id} members={wsMembers} me={me} />
@@ -1434,6 +2112,7 @@ function Workspace({ me, setMe, onLogout }) {
       </main>
       {tagFilter && <TagView tag={tagFilter.name} color={tagFilter.color} workspace={currentWsId} onOpen={setCurrentId} onClose={() => setTagFilter(null)} />}
       {sharing && page && <Share pageId={page.id} origin={location.origin} onClose={() => { setSharing(false); refreshTree(); }} />}
+      {logOpen && page && <Changelog pageId={page.id} onClose={() => setLogOpen(false)} />}
       {settings && <Settings me={me} setMe={setMe} currentWs={currentWs} onWsChange={loadWs} onLogout={onLogout} onImported={() => { refreshTree(); bumpTree(); }} onClose={() => setSettings(false)} />}
       {searching && <Search workspace={currentWsId} onOpen={setCurrentId} onClose={() => setSearching(false)} />}
       {wsModal && <NewWorkspaceModal onCreate={createWs} onClose={() => setWsModal(false)} />}

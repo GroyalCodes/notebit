@@ -4,7 +4,7 @@ services:
   notebit:
     build: .
     # Once images are published you can swap the line above for:
-    # image: ghcr.io/notebit/notebit:latest
+    # image: ghcr.io/groyalcodes/notebit:latest
     container_name: notebit
     ports:
       - "8200:8200"
