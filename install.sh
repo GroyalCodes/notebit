@@ -20,7 +20,23 @@ say "${DIM}  Notes without the bloat. Or the bill.${RESET}"
 say ""
 
 # 1. Docker
-command -v docker >/dev/null 2>&1 || fail "Docker is required. Install it from https://docs.docker.com/get-docker/ and re-run this script."
+if ! command -v docker >/dev/null 2>&1; then
+  if [ "$(uname -s)" = "Linux" ] && [ -r /dev/tty ]; then
+    say "  Docker is required and was not found."
+    printf '  Install it now with the official Docker script? (y/n) '
+    read -r ans < /dev/tty || ans=n
+    case "$ans" in
+      y|Y)
+        curl -fsSL https://get.docker.com | sh
+        say "  Docker installed. If you were added to the docker group, log out and back in, then re-run this installer."
+        command -v docker >/dev/null 2>&1 || exit 0
+        ;;
+      *) fail "Install Docker from https://docs.docker.com/get-docker/ and re-run." ;;
+    esac
+  else
+    fail "Docker is required. Install Docker Desktop from https://docs.docker.com/get-docker/ and re-run this script."
+  fi
+fi
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required (the 'docker compose' command). Update Docker Desktop or install the compose plugin: https://docs.docker.com/compose/install/"
 docker info >/dev/null 2>&1 || fail "Docker is installed but not running (or you lack permission). Start Docker, or add your user to the docker group."
 

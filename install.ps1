@@ -14,7 +14,21 @@ Write-Host "  Notes without the bloat. Or the bill." -ForegroundColor DarkGray
 Write-Host ""
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-  Write-Host "ERROR: Docker Desktop is required. Install it from https://docs.docker.com/desktop/ and re-run." -ForegroundColor Red; exit 1
+  Write-Host "  Docker Desktop is required and was not found." -ForegroundColor Yellow
+  if (Get-Command winget -ErrorAction SilentlyContinue) {
+    $r = Read-Host "  Install Docker Desktop now with winget? (y/n)"
+    if ($r -match '^[Yy]') {
+      winget install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements
+      Write-Host ""
+      Write-Host "  Docker Desktop installed." -ForegroundColor Green
+      Write-Host "  Start it from the Start menu, wait for it to say 'running' (first start can take a few minutes and may ask to enable WSL 2), then re-run:"
+      Write-Host ""
+      Write-Host "    irm https://notebit.org/install.ps1 | iex" -ForegroundColor White
+      Write-Host ""
+      exit 0
+    }
+  }
+  Write-Host "ERROR: Install Docker Desktop from https://docs.docker.com/desktop/ then re-run this installer." -ForegroundColor Red; exit 1
 }
 docker compose version *> $null
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Docker Compose v2 is required. Update Docker Desktop." -ForegroundColor Red; exit 1 }
