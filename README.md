@@ -106,17 +106,6 @@ location / {
 
 Then set `APP_URL: "https://notes.yourdomain.com"` in `docker-compose.yml` and restart. A [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) pointed at `localhost:8200` also works well if you cannot open ports.
 
-### Deploy to Fly.io
-
-NoteBit ships with a `fly.toml`. With [flyctl](https://fly.io/docs/flyctl/install/) installed:
-
-```bash
-fly launch --copy-config --no-deploy   # creates your app + a volume for /data
-fly deploy
-```
-
-Your SQLite database persists on the Fly volume, separate from the image, so deploys keep your data. Schema migrations run automatically on boot.
-
 ## Don't want to host it?
 
 [**NoteBit Cloud**](https://notebit.org#pricing) is the managed option: we host, back up, and update it for one flat price per workspace, with unlimited members. No per-seat bill.
