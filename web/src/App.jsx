@@ -45,7 +45,7 @@ function Logo({ size = 32 }) {
   );
 }
 const treeSig = (list) => (list || []).map(p => `${p.id}:${p.title}:${p.parent_id}:${p.position}:${p.icon}:${p.is_public}:${p.status}:${p.view}:${p.locked}:${p.list_cards}`).join('|');
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 function PageIcon({ icon, size = 18 }) {
   if (icon && icon.startsWith('dot:')) { const c = icon.slice(4); return <span style={{ width: Math.round(size * 0.62), height: Math.round(size * 0.62), borderRadius: '50%', background: BOARD_COLORS[c] || c || 'var(--muted)', display: 'inline-block', flex: 'none' }} />; }
   if (icon && icon.startsWith('ph:')) { const p = icon.split(':'); const I = PH[p[1]]; if (I) return <I size={size} weight="fill" color={p[2] || undefined} />; }

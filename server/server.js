@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.WIKI_DB || path.join(__dirname, 'data', 'wiki.db');
 const PORT = Number(process.env.PORT || 8200);
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 const ALLOW_SIGNUP = process.env.ALLOW_SIGNUP !== 'false';
 const WEB_DIR = process.env.WEB_DIR || path.join(__dirname, '..', 'web', 'dist');
 
