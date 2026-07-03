@@ -1,4 +1,4 @@
-// BitQuest Wiki — fully self-hosted Notion-style wiki. No external services required.
+// NoteBit: a fully self-hosted Notion-style workspace. No external services required.
 // Local SQLite, local scrypt auth, top-down per-page permissions (Notion-style, inherited).
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
@@ -117,12 +117,32 @@ function collabConnect(conn, room) {
 const getSetting = (k, d = null) => db.prepare('SELECT value FROM settings WHERE key=?').get(k)?.value ?? d;
 const setSetting = (k, v) => db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(k, String(v));
 if (getSetting('allow_signup') === null) setSetting('allow_signup', ALLOW_SIGNUP ? '1' : '0');
-if (getSetting('workspace_name') === null) setSetting('workspace_name', 'BitQuest Wiki');
+if (getSetting('workspace_name') === null) setSetting('workspace_name', 'My Workspace');
 if (getSetting('workspace_icon') === null) setSetting('workspace_icon', 'ph:BookOpen');
 if (!db.prepare('SELECT 1 FROM workspaces LIMIT 1').get()) {
   const wid = crypto.randomUUID();
-  db.prepare('INSERT INTO workspaces (id,name,icon,position) VALUES (?,?,?,0)').run(wid, getSetting('workspace_name', 'BitQuest Wiki'), getSetting('workspace_icon', 'ph:BookOpen'));
+  db.prepare('INSERT INTO workspaces (id,name,icon,position) VALUES (?,?,?,0)').run(wid, getSetting('workspace_name', 'My Workspace'), getSetting('workspace_icon', 'ph:BookOpen'));
   db.prepare('UPDATE pages SET workspace_id=? WHERE workspace_id IS NULL').run(wid);
+  // fresh install: seed a welcome page that shows the editor off (fully editable/deletable)
+  const t = (text, styles) => ({ type: 'text', text, styles: styles || {} });
+  const welcome = [
+    { type: 'callout', props: { emoji: '👋', bg: 'accent' }, content: [t('Welcome to NoteBit. This page is yours: edit it, break it, or delete it.')] },
+    { type: 'heading', props: { level: 2 }, content: [t('The basics')] },
+    { type: 'checkListItem', props: { checked: false }, content: [t('Type '), t('/', { code: true }), t(' anywhere for blocks')] },
+    { type: 'checkListItem', props: { checked: false }, content: [t('Drag the handle on the left to move things; box-select from the margins to grab several')] },
+    { type: 'checkListItem', props: { checked: false }, content: [t('Right-click a block for everything else')] },
+    { type: 'checkListItem', props: { checked: false }, content: [t('Tab nests, Shift+Tab un-nests')] },
+    { type: 'toggle', props: {}, content: [t('Click the arrow on this toggle')], children: [
+      { type: 'paragraph', content: [t('Anything can live inside: text, lists, even more toggles.')] },
+    ] },
+    { type: 'heading', props: { level: 2 }, content: [t('Make it a team')] },
+    { type: 'paragraph', content: [t('Invite people in Settings then People. You will see their cursors live on the page, and comments with @mentions land in the inbox by the search bar.')] },
+    { type: 'paragraph', content: [t('The Overview in the sidebar draws a living map of how your pages connect. The New board button makes a kanban where every card is a page.')] },
+    { type: 'divider', props: {} },
+    { type: 'quote', props: {}, content: [t('Notes without the bloat. Or the bill.')] },
+  ];
+  db.prepare('INSERT INTO pages (id,parent_id,owner_id,workspace_id,title,icon,content,position) VALUES (?,?,?,?,?,?,?,0)')
+    .run(crypto.randomUUID(), null, 1, wid, 'Welcome to NoteBit', 'ph:HandWaving:#a78bdb', JSON.stringify(welcome));
 }
 try { db.prepare("UPDATE page_access SET role='read' WHERE role='view'").run(); db.prepare("UPDATE page_access SET role='write' WHERE role='edit'").run(); } catch {}
 if (!db.prepare('SELECT 1 FROM workspace_member LIMIT 1').get()) {
@@ -150,7 +170,7 @@ for (const board of db.prepare("SELECT id,owner_id,workspace_id,board_cols FROM 
   })();
 }
 const allowSignup = () => getSetting('allow_signup', '1') === '1';
-const workspaceInfo = () => ({ name: getSetting('workspace_name', 'Wiki'), icon: getSetting('workspace_icon', 'ph:BookOpen') });
+const workspaceInfo = () => ({ name: getSetting('workspace_name', 'My Workspace'), icon: getSetting('workspace_icon', 'ph:BookOpen') });
 
 // ---- email (Resend HTTP API) ----
 async function sendEmail(to, subject, html) {
