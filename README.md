@@ -89,6 +89,17 @@ One command, and **your data is kept**: it lives in the Docker volume (`notebit-
 
 (That's just `git pull && docker compose up -d --build`.) NoteBit shows an **"update available"** notice in **Settings → Account → About** when a newer release is out, and you can always check the running version at `GET /api/version`. Releases are tagged [here](https://github.com/GroyalCodes/notebit/releases); `main` is always the latest stable.
 
+### Uninstalling
+
+From the folder you installed in:
+
+```bash
+./uninstall.sh            # macOS / Linux
+irm https://notebit.org/uninstall.ps1 | iex   # Windows
+```
+
+It removes the container and image, and asks before touching your notes. If you keep the `notebit-data` volume (the default), reinstalling later brings every page back.
+
 ### Serve it on your own domain
 
 Put any reverse proxy in front of port 8200 and set `APP_URL` so invite links use your domain. With [Caddy](https://caddyserver.com) it is three lines and HTTPS is automatic:
