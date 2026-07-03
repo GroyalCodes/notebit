@@ -4,7 +4,7 @@
 # Checks Docker Desktop, fetches NoteBit, starts it with docker compose, and waits
 # until it answers. Your data lives in the notebit-data Docker volume.
 # Re-running is safe: an existing install is updated in place.
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"  # PS 5.1 turns native stderr into fatal errors under Stop
 $dir = if ($env:NOTEBIT_DIR) { $env:NOTEBIT_DIR } else { "notebit" }
 $repo = "https://github.com/GroyalCodes/notebit"
 
@@ -33,7 +33,23 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 docker compose version *> $null
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Docker Compose v2 is required. Update Docker Desktop." -ForegroundColor Red; exit 1 }
 docker info *> $null
-if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Docker is installed but not running. Start Docker Desktop, wait for the whale to settle, and re-run." -ForegroundColor Red; exit 1 }
+if ($LASTEXITCODE -ne 0) {
+  $dd = Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"
+  if (Test-Path $dd) {
+    Write-Host "  Docker is installed but the engine is asleep. Waking Docker Desktop..."
+    Start-Process $dd | Out-Null
+    $ok = $false
+    for ($i = 0; $i -lt 60; $i++) {
+      Start-Sleep 3
+      docker info *> $null
+      if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+      if ($i % 10 -eq 9) { Write-Host "  Still starting (first launch can take a while)..." }
+    }
+    if (-not $ok) { Write-Host "ERROR: the Docker engine did not come up after 3 minutes. Open Docker Desktop, wait for 'Engine running', then re-run this installer." -ForegroundColor Red; exit 1 }
+  } else {
+    Write-Host "ERROR: Docker is installed but not running. Start Docker Desktop, wait for the whale to settle, and re-run." -ForegroundColor Red; exit 1
+  }
+}
 Write-Host "  [1/4] Docker found. Good whale."
 
 if (Test-Path (Join-Path $dir ".git")) {
@@ -44,6 +60,7 @@ if (Test-Path (Join-Path $dir ".git")) {
 } elseif (Get-Command git -ErrorAction SilentlyContinue) {
   Write-Host "  [2/4] Fetching NoteBit... a few megabytes of honest code."
   git clone --depth 1 "$repo.git" $dir
+  if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: could not fetch NoteBit from GitHub. Check your connection and re-run." -ForegroundColor Red; exit 1 }
 } else {
   Write-Host "  [2/4] Fetching NoteBit (no git found, zip it is)..."
   $zip = Join-Path $env:TEMP "notebit.zip"
