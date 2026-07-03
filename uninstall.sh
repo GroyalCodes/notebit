@@ -23,7 +23,7 @@ if [ -r /dev/tty ]; then
   say "  Your notes live in the notebit-data volume. If you keep it, reinstalling"
   say "  later brings every page back exactly as it was."
   printf '  Delete your notes too? (y/N) '
-  read -r wipe < /dev/tty || wipe=n
+  read -r wipe < /dev/tty 2>/dev/null || wipe=n
 fi
 
 if [ "$wipe" = "y" ] || [ "$wipe" = "Y" ]; then
