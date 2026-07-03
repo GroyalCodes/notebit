@@ -39,41 +39,42 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required (the 'docker compose' command). Update Docker Desktop or install the compose plugin: https://docs.docker.com/compose/install/"
 docker info >/dev/null 2>&1 || fail "Docker is installed but not running (or you lack permission). Start Docker, or add your user to the docker group."
+say "  [1/4] Docker found. Good whale."
 
 # 2. Fetch or update the source
 if [ -d "$DIR/.git" ]; then
-  say "  Existing install found in ./$DIR, updating..."
+  say "  [2/4] Existing install found in ./$DIR, pulling the latest..."
   git -C "$DIR" pull --ff-only || say "  (could not fast-forward, continuing with current version)"
 elif [ -d "$DIR" ]; then
   fail "./$DIR exists but is not a NoteBit checkout. Set NOTEBIT_DIR to another folder and re-run."
 elif command -v git >/dev/null 2>&1; then
-  say "  Fetching NoteBit..."
+  say "  [2/4] Fetching NoteBit... a few megabytes of honest code."
   git clone --depth 1 "$REPO.git" "$DIR"
 else
-  say "  Fetching NoteBit (no git found, using tarball)..."
+  say "  [2/4] Fetching NoteBit (no git found, tarball it is)..."
   mkdir -p "$DIR"
   curl -fsSL "$REPO/archive/refs/heads/main.tar.gz" | tar xz --strip-components=1 -C "$DIR"
 fi
 
 # 3. Build and start
-say "  Building and starting (first build takes a few minutes)..."
+say "  [3/4] Building your container. The first build is the slow one; every update after is quick. Stretch your legs."
 cd "$DIR"
 docker compose up -d --build
 
 # 4. Wait until it answers
-say "  Waiting for NoteBit to come up..."
+say "  [4/4] Waiting for the first heartbeat..."
 for i in $(seq 1 45); do
   if curl -fsS http://localhost:8200/api/version >/dev/null 2>&1; then
     VERSION=$(curl -fsS http://localhost:8200/api/version | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
     say ""
-    say "${BOLD}  NoteBit v${VERSION} is running.${RESET}"
+    say "${BOLD}  NoteBit v${VERSION} is alive: http://localhost:8200${RESET}"
     say ""
-    say "  Open:      http://localhost:8200"
-    say "  First account created becomes the admin."
+    say "  First account created becomes the admin. Choose wisely."
     say ""
-    say "  Update:    cd $DIR && ./update.sh   (your data is kept)"
+    say "  Update:    cd $DIR && ./update.sh   (your data always stays)"
     say "  Stop:      cd $DIR && docker compose down"
-    say "  Data:      Docker volume 'notebit-data' (back it up to back up everything)"
+    say "  Data:      everything lives in the 'notebit-data' volume."
+    say "             Back that up and you can walk away from a burning server."
     say ""
     say "${DIM}  Prefer managed hosting? https://notebit.org${RESET}"
     say ""

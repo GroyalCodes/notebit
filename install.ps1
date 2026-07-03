@@ -33,18 +33,19 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 docker compose version *> $null
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Docker Compose v2 is required. Update Docker Desktop." -ForegroundColor Red; exit 1 }
 docker info *> $null
-if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Docker is installed but not running. Start Docker Desktop and re-run." -ForegroundColor Red; exit 1 }
+if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Docker is installed but not running. Start Docker Desktop, wait for the whale to settle, and re-run." -ForegroundColor Red; exit 1 }
+Write-Host "  [1/4] Docker found. Good whale."
 
 if (Test-Path (Join-Path $dir ".git")) {
-  Write-Host "  Existing install found in .\$dir, updating..."
+  Write-Host "  [2/4] Existing install found in .\$dir, pulling the latest..."
   git -C $dir pull --ff-only
 } elseif (Test-Path $dir) {
   Write-Host "ERROR: .\$dir exists but is not a NoteBit checkout. Set NOTEBIT_DIR to another folder." -ForegroundColor Red; exit 1
 } elseif (Get-Command git -ErrorAction SilentlyContinue) {
-  Write-Host "  Fetching NoteBit..."
+  Write-Host "  [2/4] Fetching NoteBit... a few megabytes of honest code."
   git clone --depth 1 "$repo.git" $dir
 } else {
-  Write-Host "  Fetching NoteBit (no git found, using zip)..."
+  Write-Host "  [2/4] Fetching NoteBit (no git found, zip it is)..."
   $zip = Join-Path $env:TEMP "notebit.zip"
   Invoke-WebRequest -UseBasicParsing "$repo/archive/refs/heads/main.zip" -OutFile $zip
   Expand-Archive $zip -DestinationPath $env:TEMP -Force
@@ -53,23 +54,24 @@ if (Test-Path (Join-Path $dir ".git")) {
 }
 
 Set-Location $dir
-Write-Host "  Building and starting (first build takes a few minutes)..."
+Write-Host "  [3/4] Building your container. The first build is the slow one; every update after is quick. Stretch your legs."
 docker compose up -d --build
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: docker compose failed. Check the output above." -ForegroundColor Red; exit 1 }
 
-Write-Host "  Waiting for NoteBit to come up..."
+Write-Host "  [4/4] Waiting for the first heartbeat..."
 for ($i = 0; $i -lt 45; $i++) {
   try {
     $v = Invoke-RestMethod "http://localhost:8200/api/version" -TimeoutSec 2
     if ($v.version) {
       Write-Host ""
-      Write-Host "  NoteBit v$($v.version) is running." -ForegroundColor Green
+      Write-Host "  NoteBit v$($v.version) is alive: http://localhost:8200" -ForegroundColor Green
       Write-Host ""
-      Write-Host "  Open:    http://localhost:8200"
-      Write-Host "  First account created becomes the admin."
+      Write-Host "  First account created becomes the admin. Choose wisely."
       Write-Host ""
-      Write-Host "  Update:  re-run this installer (your data is kept)"
+      Write-Host "  Update:  re-run this installer (your data always stays)"
       Write-Host "  Stop:    docker compose down   (inside the $dir folder)"
+      Write-Host "  Data:    everything lives in the notebit-data volume."
+      Write-Host "           Back that up and you can walk away from a burning server."
       Write-Host ""
       Write-Host "  Prefer managed hosting? https://notebit.org" -ForegroundColor DarkGray
       exit 0
