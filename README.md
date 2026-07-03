@@ -48,6 +48,12 @@ One line (needs [Docker](https://docs.docker.com/get-docker/)):
 curl -fsSL https://notebit.org/install.sh | bash
 ```
 
+On Windows (PowerShell):
+
+```powershell
+irm https://notebit.org/install.ps1 | iex
+```
+
 It fetches NoteBit, builds it, starts it, and tells you when it's up. Re-run it any time to update; your data is kept. Prefer to do it by hand:
 
 ```bash
