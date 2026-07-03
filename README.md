@@ -42,7 +42,7 @@ Notes apps got bloated and pricey. NoteBit is neither.
 
 ## Self-host
 
-One line (needs [Docker](https://docs.docker.com/get-docker/)):
+One line. No Docker needed:
 
 ```bash
 curl -fsSL https://notebit.org/install.sh | bash
@@ -54,17 +54,22 @@ On Windows (PowerShell):
 irm https://notebit.org/install.ps1 | iex
 ```
 
-It fetches NoteBit, builds it, starts it, and tells you when it's up. Re-run it any time to update; your data is kept. Prefer to do it by hand:
+The installer uses your Node if you have version 20 or newer, or fetches a private runtime that lives inside the notebit folder and touches nothing else. It downloads the prebuilt app, starts it in the background, and opens http://localhost:8200. Your notes live in `notebit/data` as a single SQLite database; back up that folder and you have backed up everything. Re-run the installer any time to update.
+
+`start.sh` / `stop.sh` (or `Start NoteBit.bat` / `Stop NoteBit.bat` on Windows) control it afterwards.
+
+### Prefer Docker?
+
+Docker is fully supported, just optional:
 
 ```bash
+NOTEBIT_DOCKER=1 bash -c "$(curl -fsSL https://notebit.org/install.sh)"
+# or by hand:
 git clone https://github.com/GroyalCodes/notebit.git
-cd notebit
-docker compose up -d
+cd notebit && docker compose up -d
 ```
 
-Open **http://localhost:8200** and create your account. The first account is the admin.
-
-Your data lives in a Docker volume (`notebit-data`) as a single SQLite database. Back it up by copying that volume.
+In Docker, data lives in the `notebit-data` volume instead.
 
 ### Configuration
 
@@ -81,13 +86,11 @@ All optional except where noted. Set via environment in `docker-compose.yml` or 
 
 ### Updating
 
-One command, and **your data is kept**: it lives in the Docker volume (`notebit-data`), separate from the app image, and schema migrations run automatically on startup:
+**Native installs**: re-run the install one-liner. It swaps the app and keeps your data.
 
-```bash
-./update.sh
-```
+**Docker installs**: run `./update.sh` (that's just `git pull && docker compose up -d --build`).
 
-(That's just `git pull && docker compose up -d --build`.) NoteBit shows an **"update available"** notice in **Settings → Account → About** when a newer release is out, and you can always check the running version at `GET /api/version`. Releases are tagged [here](https://github.com/GroyalCodes/notebit/releases); `main` is always the latest stable.
+Either way your data is kept, and schema migrations run automatically on startup. NoteBit shows an **"update available"** notice in **Settings → Account → About** when a newer release is out; check the running version any time at `GET /api/version`.
 
 ### Uninstalling
 
