@@ -186,7 +186,7 @@ async function sendEmail(to, subject, html) {
   } catch (e) { return { ok: false, error: String(e) }; }
 }
 function inviteEmail(email, password, inviter, wsName) {
-  const url = process.env.APP_URL || 'http://localhost:8200';
+  const url = getSetting('app_url') || process.env.APP_URL || 'http://localhost:8200';
   return `<div style="font-family:ui-sans-serif,system-ui,sans-serif;max-width:480px;margin:24px auto;color:#1f1f1f">
     <div style="font-size:22px;font-weight:700;color:#8a6fc4">📝 NoteBit</div>
     <h2 style="margin:14px 0 6px">You're invited!</h2>
@@ -576,7 +576,7 @@ app.delete('/api/admin/users/:id', async (req, reply) => {
 app.get('/api/admin/settings', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   const keySource = getSetting('resend_key') ? 'app' : (process.env.RESEND_API_KEY ? 'env' : null);
-  return { allow_signup: allowSignup(), email_configured: !!keySource, email_key_source: keySource, mail_from: getSetting('mail_from') || process.env.MAIL_FROM || '' };
+  return { allow_signup: allowSignup(), email_configured: !!keySource, email_key_source: keySource, mail_from: getSetting('mail_from') || process.env.MAIL_FROM || '', app_url: getSetting('app_url') || process.env.APP_URL || '' };
 });
 app.post('/api/admin/test-email', async (req, reply) => {
   const u = requireAdmin(req, reply); if (!u) return;
@@ -585,12 +585,13 @@ app.post('/api/admin/test-email', async (req, reply) => {
 });
 app.put('/api/admin/settings', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
-  const { allow_signup, resend_key, mail_from } = req.body || {};
+  const { allow_signup, resend_key, mail_from, app_url } = req.body || {};
   if (allow_signup !== undefined) setSetting('allow_signup', allow_signup ? '1' : '0');
   if (resend_key !== undefined) setSetting('resend_key', String(resend_key).trim().slice(0, 200));
   if (mail_from !== undefined) setSetting('mail_from', String(mail_from).trim().slice(0, 200));
+  if (app_url !== undefined) setSetting('app_url', String(app_url).trim().replace(/\/+$/, '').slice(0, 300));
   const keySource = getSetting('resend_key') ? 'app' : (process.env.RESEND_API_KEY ? 'env' : null);
-  return { allow_signup: allowSignup(), email_configured: !!keySource, email_key_source: keySource, mail_from: getSetting('mail_from') || process.env.MAIL_FROM || '' };
+  return { allow_signup: allowSignup(), email_configured: !!keySource, email_key_source: keySource, mail_from: getSetting('mail_from') || process.env.MAIL_FROM || '', app_url: getSetting('app_url') || process.env.APP_URL || '' };
 });
 
 // ---- search ----

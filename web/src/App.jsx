@@ -1347,7 +1347,8 @@ function Workspaces({ currentWs, onWsChange }) {
   const [ekey, setEkey] = useState('');
   const [efrom, setEfrom] = useState('');
   const [emsg, setEmsg] = useState('');
-  useEffect(() => { api('/admin/settings').then(r => { setS(r); setEfrom(r.mail_from || ''); }).catch(() => {}); }, []);
+  const [aurl, setAurl] = useState('');
+  useEffect(() => { api('/admin/settings').then(r => { setS(r); setEfrom(r.mail_from || ''); setAurl(r.app_url || ''); }).catch(() => {}); }, []);
   useEffect(() => { setName(currentWs?.name || ''); setIcon(currentWs?.icon || 'ph:BookOpen'); }, [currentWs?.id]);
   if (!s) return null;
   const toggle = async () => { const r = await api('/admin/settings', { method: 'PUT', body: { allow_signup: !s.allow_signup } }); setS(r); };
@@ -1372,8 +1373,10 @@ function Workspaces({ currentWs, onWsChange }) {
           <input type="password" placeholder={s.email_key_source === 'app' ? 'saved, enter a new key to replace' : 're_...'} value={ekey} onChange={e => setEkey(e.target.value)} /></label>
         <label className="fld"><span>From address (a domain you verified at Resend, or leave blank)</span>
           <input placeholder="NoteBit <notes@yourdomain.com>" value={efrom} onChange={e => setEfrom(e.target.value)} /></label>
+        <label className="fld"><span>Public URL (used in invite links; set this if you serve NoteBit on your own domain)</span>
+          <input placeholder="https://notes.yourdomain.com" value={aurl} onChange={e => setAurl(e.target.value)} /></label>
         <div className="row gap">
-          <button className="mini gold" onClick={async () => { const body = { mail_from: efrom }; if (ekey.trim()) body.resend_key = ekey.trim(); const r = await api('/admin/settings', { method: 'PUT', body }); setS(r); setEkey(''); setEmsg('Saved ✓'); setTimeout(() => setEmsg(''), 2000); }}>Save email settings</button>
+          <button className="mini gold" onClick={async () => { const body = { mail_from: efrom, app_url: aurl }; if (ekey.trim()) body.resend_key = ekey.trim(); const r = await api('/admin/settings', { method: 'PUT', body }); setS(r); setEkey(''); setEmsg('Saved ✓'); setTimeout(() => setEmsg(''), 2000); }}>Save</button>
           <button className="mini" disabled={!s.email_configured} onClick={async () => { setEmsg('Sending…'); try { const r = await api('/admin/test-email', { method: 'POST', body: {} }); setEmsg(r.ok ? '✓ ' + r.detail : '✗ ' + r.detail); } catch { setEmsg('✗ failed'); } }}>Send test email</button>
           {emsg && <span className="muted small">{emsg}</span>}
         </div>
