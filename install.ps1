@@ -60,12 +60,36 @@ if (-not $node) {
   $node = "$PWD\runtime\node.exe"; $npm = "$PWD\runtime\npm.cmd"
 }
 
+# stop anything already running from this folder BEFORE replacing files
+# (Windows cannot delete a .node binary that a live process has loaded)
+function Stop-NoteBit {
+  if (Test-Path "notebit.pid") {
+    $p = Get-Content "notebit.pid" -ErrorAction SilentlyContinue
+    if ($p) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+    Remove-Item "notebit.pid" -ErrorAction SilentlyContinue
+  }
+  $here = [regex]::Escape("$PWD")
+  Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match $here } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+Stop-NoteBit
+Start-Sleep 1
+
 # [2/4] the app itself, prebuilt
 Write-Host "  [2/4] Fetching NoteBit... a few megabytes of honest code."
 Invoke-WebRequest -UseBasicParsing "$repo/releases/latest/download/notebit-app.zip" -OutFile "app.zip"
 if (Test-Path ".app.new") { Remove-Item ".app.new" -Recurse -Force }
 Expand-Archive "app.zip" -DestinationPath ".app.new" -Force
-if (Test-Path "app") { Remove-Item "app" -Recurse -Force }
+if (Test-Path "app") {
+  $gone = $false
+  for ($i = 0; $i -lt 6; $i++) {
+    Remove-Item "app" -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path "app")) { $gone = $true; break }
+    Stop-NoteBit; Start-Sleep 2
+  }
+  if (-not $gone) { Write-Host "ERROR: could not replace the app folder; something still has it open. Close programs using $PWD (or reboot) and re-run." -ForegroundColor Red; exit 1 }
+}
 Move-Item ".app.new\notebit-app" "app"
 Remove-Item ".app.new" -Recurse -Force
 Remove-Item "app.zip"
@@ -80,14 +104,7 @@ if ($npmOk -ne 0) { Write-Host "ERROR: dependency install failed. Check your con
 
 # [4/4] run it
 New-Item -ItemType Directory -Force -Path "data" | Out-Null
-if (Test-Path "notebit.pid") {
-  $oldPid = Get-Content "notebit.pid" -ErrorAction SilentlyContinue
-  if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
-    Write-Host "  [4/4] Swapping the old NoteBit for the new one..."
-    Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
-    Start-Sleep 1
-  } else { Write-Host "  [4/4] First heartbeat coming up..." }
-} else { Write-Host "  [4/4] First heartbeat coming up..." }
+Write-Host "  [4/4] First heartbeat coming up..."
 
 $env:WIKI_DB = "$PWD\data\notebit.db"; $env:PORT = $port; $env:HOST = "127.0.0.1"; $env:APP_URL = "http://localhost:$port"
 $proc = Start-Process -FilePath $node -ArgumentList "app\server\server.js" -WorkingDirectory $PWD -WindowStyle Hidden -PassThru `
@@ -143,4 +160,15 @@ for ($i = 0; $i -lt 30; $i++) {
     }
   } catch {}
 }
-if (-not $up) { Write-Host "ERROR: NoteBit did not respond on http://localhost:$port after 30s. Check $dir\notebit.err.log" -ForegroundColor Red; exit 1 }
+if (-not $up) {
+  Write-Host ""
+  Write-Host "ERROR: NoteBit did not respond on http://localhost:$port after 30s." -ForegroundColor Red
+  $err = Get-Content "notebit.err.log" -Tail 15 -ErrorAction SilentlyContinue
+  if ($err) { Write-Host ""; Write-Host "  Last lines of notebit.err.log:" -ForegroundColor Yellow; $err | ForEach-Object { Write-Host "    $_" } }
+  if ($err -and ($err -join " ") -match "EADDRINUSE") {
+    Write-Host ""
+    Write-Host "  Port $port is taken by another program. Re-run on a different port:" -ForegroundColor Yellow
+    Write-Host "    `$env:NOTEBIT_PORT=8300; irm https://notebit.org/install.ps1 | iex" -ForegroundColor White
+  }
+  exit 1
+}

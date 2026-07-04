@@ -61,6 +61,11 @@ if [ -z "$NODE" ]; then
   export PATH="$PWD/runtime/bin:$PATH"
 fi
 
+# stop anything already running from this folder before replacing files
+[ -f notebit.pid ] && kill "$(cat notebit.pid)" 2>/dev/null || true
+pkill -f "$PWD/app/server/server.js" 2>/dev/null || true
+rm -f notebit.pid
+
 # [2/4] the app itself, prebuilt
 say "  [2/4] Fetching NoteBit... a few megabytes of honest code."
 rm -rf .app.new && mkdir .app.new
@@ -73,12 +78,7 @@ say "  [3/4] Installing server dependencies. The database engine arrives precomp
 
 # [4/4] run it
 mkdir -p data
-if [ -f notebit.pid ] && kill -0 "$(cat notebit.pid)" 2>/dev/null; then
-  say "  [4/4] Swapping the old NoteBit for the new one..."
-  kill "$(cat notebit.pid)" 2>/dev/null || true; sleep 1
-else
-  say "  [4/4] First heartbeat coming up..."
-fi
+say "  [4/4] First heartbeat coming up..."
 WIKI_DB="$PWD/data/notebit.db" PORT="$PORT" HOST=127.0.0.1 APP_URL="http://localhost:$PORT" \
   nohup "$NODE" app/server/server.js >> notebit.log 2>&1 &
 echo $! > notebit.pid
@@ -124,4 +124,14 @@ for i in $(seq 1 30); do
   fi
   sleep 1
 done
-fail "NoteBit did not respond on http://localhost:$PORT after 30s. Check $DIR/notebit.log"
+say ""
+say "ERROR: NoteBit did not respond on http://localhost:$PORT after 30s."
+say ""
+say "  Last lines of the log:"
+tail -15 notebit.log 2>/dev/null | sed "s/^/    /"
+if tail -15 notebit.log 2>/dev/null | grep -q EADDRINUSE; then
+  say ""
+  say "  Port $PORT is taken by another program. Re-run on a different port:"
+  say "    NOTEBIT_PORT=8300 bash -c \"\$(curl -fsSL https://notebit.org/install.sh)\""
+fi
+exit 1
