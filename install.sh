@@ -98,7 +98,12 @@ cat > stop.sh << 'EOS'
 cd "$(dirname "$0")"
 [ -f notebit.pid ] && kill "$(cat notebit.pid)" 2>/dev/null && rm -f notebit.pid && echo "NoteBit stopped." || echo "NoteBit was not running."
 EOS
-chmod +x start.sh stop.sh
+cat > restart.sh << 'EOS'
+#!/usr/bin/env bash
+cd "$(dirname "$0")"
+./stop.sh; sleep 1; ./start.sh
+EOS
+chmod +x start.sh stop.sh restart.sh
 
 for i in $(seq 1 30); do
   if curl -fsS "http://localhost:$PORT/api/version" >/dev/null 2>&1; then

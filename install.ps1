@@ -113,6 +113,12 @@ for /f %%p in (%~dp0notebit.pid) do taskkill /f /pid %%p >nul 2>&1
 del "%~dp0notebit.pid" >nul 2>&1
 echo NoteBit stopped.
 "@ | Out-File "Stop NoteBit.bat" -Encoding ascii
+@"
+@echo off
+call "%~dp0Stop NoteBit.bat"
+timeout /t 2 /nobreak >nul
+call "%~dp0Start NoteBit.bat"
+"@ | Out-File "Restart NoteBit.bat" -Encoding ascii
 
 $up = $false
 for ($i = 0; $i -lt 30; $i++) {
