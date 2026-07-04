@@ -1153,15 +1153,20 @@ function Settings({ me, setMe, currentWs, onWsChange, onLogout, onImported, onCl
 }
 function UpdateNotice() {
   const [u, setU] = useState(null);
-  useEffect(() => { api('/update-check').then(setU).catch(() => setU({ current: APP_VERSION })); }, []);
+  const [busy, setBusy] = useState(false);
+  const check = (force) => { setBusy(true); api('/update-check' + (force ? '?force=1' : '')).then(r => { setU(r); setBusy(false); }).catch(() => { setU({ current: APP_VERSION }); setBusy(false); }); };
+  useEffect(() => { check(false); }, []);
   if (!u) return null;
   return (
   <>
     <div className="upd">
       <span>NoteBit <b>v{u.current}</b></span>
-      {u.updateAvailable
-        ? <a className="upd-new" href={u.url} target="_blank" rel="noreferrer">Update to v{u.latest} →</a>
-        : <span className="muted small">You're up to date</span>}
+      <span className="row gap">
+        {u.updateAvailable
+          ? <a className="upd-new" href={u.url} target="_blank" rel="noreferrer">Update to v{u.latest} →</a>
+          : <span className="muted small">You're up to date</span>}
+        <button className="mini" disabled={busy} onClick={() => check(true)}>{busy ? 'Checking…' : 'Check now'}</button>
+      </span>
     </div>
     <div className="upd">
       <span className="muted small">Prefer managed hosting?</span>

@@ -436,8 +436,8 @@ app.post('/api/auth/login', async (req, reply) => {
 app.post('/api/auth/logout', async (req, reply) => { if (req.cookies?.sid) db.prepare('DELETE FROM sessions WHERE token=?').run(req.cookies.sid); reply.clearCookie('sid', { path: '/' }); return { ok: true }; });
 app.get('/api/version', async () => ({ name: 'NoteBit', version: VERSION }));
 let _upd = { at: 0, data: null };
-app.get('/api/update-check', async () => {
-  if (_upd.data && Date.now() - _upd.at < 1800000) return _upd.data;
+app.get('/api/update-check', async (req) => {
+  if (!req.query?.force && _upd.data && Date.now() - _upd.at < 1800000) return _upd.data;
   let latest = null, url = 'https://github.com/GroyalCodes/notebit/releases';
   try { const r = await fetch('https://api.github.com/repos/GroyalCodes/notebit/releases/latest', { headers: { 'User-Agent': 'notebit', Accept: 'application/vnd.github+json' } }); if (r.ok) { const j = await r.json(); latest = String(j.tag_name || '').replace(/^v/, '') || null; url = j.html_url || url; } } catch {}
   const data = { current: VERSION, latest, updateAvailable: !!latest && latest !== VERSION, url };
