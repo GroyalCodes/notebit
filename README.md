@@ -30,16 +30,6 @@ Notes apps got bloated and pricey. NoteBit is neither.
 - **Publish to the web**: share any page or board publicly, read-only.
 - **Own your data**: it all lives in one SQLite database you control.
 
-## Screenshots
-
-> Drop a couple of real captures from your instance here, e.g. `docs/editor.png`, `docs/board.png`, `docs/graph.png`:
->
-> ```md
-> ![Editor](docs/editor.png)
-> ![Boards](docs/board.png)
-> ![Knowledge graph](docs/graph.png)
-> ```
-
 ## Self-host
 
 One line. No Docker needed:

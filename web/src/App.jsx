@@ -1104,7 +1104,7 @@ function AdminUsers({ me }) {
   return (
     <div className="set-pane">
       <h3>All users <span className="muted">· {users.length}</span></h3>
-      <div className="muted small">Everyone with a NoteBit account. Super-admins manage every workspace and these accounts. Invite people into a workspace from the <b>Members</b> tab.</div>
+      <div className="muted small">Everyone with a NoteBit account. Super-admins manage every workspace and these accounts. Invite people into a workspace from the <b>People</b> tab.</div>
       {users.map(u => (
         <div className="member" key={u.id}>
           <Avatar user={u} size={34} />
@@ -1188,7 +1188,7 @@ function Account({ me, setMe, onLogout }) {
       <h3>My account</h3>
       <div className="row gap14">
         <Avatar user={me} size={64} />
-        <div className="col">
+        <div className="row gap">
           <button className="mini" onClick={() => fileRef.current.click()}>Upload photo</button>
           {me.avatar && <button className="mini" onClick={async () => { await api('/me', { method: 'PUT', body: { avatar: null } }); setMe(m => ({ ...m, avatar: null })); }}>Remove</button>}
           <input ref={fileRef} type="file" accept="image/*" hidden onChange={pickAvatar} />
@@ -1363,26 +1363,36 @@ function Workspaces({ currentWs, onWsChange }) {
           {picker && <IconPicker onPick={setWsIcon} onClose={() => setPicker(false)} />}</span>
         <label className="fld grow"><span>Workspace name</span><div className="row gap"><input value={name} onChange={e => setName(e.target.value)} /><button className="mini gold" onClick={saveName}>Save</button>{msg && <span className="muted small">{msg}</span>}</div></label>
       </div>
-      <div className="row between fld2"><div className="col"><b>Open sign-up</b><span className="muted small">Let anyone with the link create an account</span></div>
-        <label className="sw"><input type="checkbox" checked={!!s.allow_signup} onChange={toggle} /><span /></label></div>
-      <div className="row between fld2"><div className="col"><b>Email invites</b>
-        <span className="muted small">{s.email_configured ? (s.email_key_source === 'env' ? 'Configured via environment.' : 'Configured.') + ' Invites are emailed automatically.' : 'Not configured. Invites still work, but you must share the link by hand.'}</span></div>
-        <span className={'role-badge'} style={{ color: s.email_configured ? '#5fc18a' : 'var(--muted)' }}>{s.email_configured ? 'On' : 'Off'}</span></div>
-      <div className="col" style={{ gap: 8 }}>
+      <h3>Access</h3>
+      <div className="set-group">
+        <div className="row between"><div className="col"><b>Open sign-up</b><span className="muted small">Let anyone with the link create an account</span></div>
+          <label className="sw"><input type="checkbox" checked={!!s.allow_signup} onChange={toggle} /><span /></label></div>
+      </div>
+      <h3>Email invites</h3>
+      <div className="set-group">
+        <div className="row between"><div className="col"><span className="muted small">{s.email_configured ? (s.email_key_source === 'env' ? 'Configured via environment. ' : '') + 'Invites are emailed automatically.' : 'Not configured. Invites still work, but you must share the link by hand.'}</span></div>
+          <span className={'role-badge'} style={{ color: s.email_configured ? '#5fc18a' : 'var(--muted)' }}>{s.email_configured ? 'On' : 'Off'}</span></div>
         <label className="fld"><span>Resend API key <a href="https://resend.com/api-keys" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>(get one free)</a></span>
           <input type="password" placeholder={s.email_key_source === 'app' ? 'saved, enter a new key to replace' : 're_...'} value={ekey} onChange={e => setEkey(e.target.value)} /></label>
-        <label className="fld"><span>From address (a domain you verified at Resend, or leave blank)</span>
+        <label className="fld"><span>From address (a domain verified at Resend, or leave blank)</span>
           <input placeholder="NoteBit <notes@yourdomain.com>" value={efrom} onChange={e => setEfrom(e.target.value)} /></label>
-        <label className="fld"><span>Public URL (used in invite links; set this if you serve NoteBit on your own domain)</span>
-          <input placeholder="https://notes.yourdomain.com" value={aurl} onChange={e => setAurl(e.target.value)} /></label>
         <div className="row gap">
-          <button className="mini gold" onClick={async () => { const body = { mail_from: efrom, app_url: aurl }; if (ekey.trim()) body.resend_key = ekey.trim(); const r = await api('/admin/settings', { method: 'PUT', body }); setS(r); setEkey(''); setEmsg('Saved ✓'); setTimeout(() => setEmsg(''), 2000); }}>Save</button>
+          <button className="mini gold" onClick={async () => { const body = { mail_from: efrom }; if (ekey.trim()) body.resend_key = ekey.trim(); const r = await api('/admin/settings', { method: 'PUT', body }); setS(r); setEkey(''); setEmsg('Saved ✓'); setTimeout(() => setEmsg(''), 2000); }}>Save email settings</button>
           <button className="mini" disabled={!s.email_configured} onClick={async () => { setEmsg('Sending…'); try { const r = await api('/admin/test-email', { method: 'POST', body: {} }); setEmsg(r.ok ? '✓ ' + r.detail : '✗ ' + r.detail); } catch { setEmsg('✗ failed'); } }}>Send test email</button>
           {emsg && <span className="muted small">{emsg}</span>}
         </div>
       </div>
+      <h3>Server</h3>
+      <div className="set-group">
+        <div className="col"><b>Public URL</b><span className="muted small">Used in invite links. Set this when you serve NoteBit on your own domain.</span></div>
+        <div className="row gap"><input className="grow" placeholder="https://notes.yourdomain.com" value={aurl} onChange={e => setAurl(e.target.value)} />
+          <button className="mini gold" onClick={async () => { const r = await api('/admin/settings', { method: 'PUT', body: { app_url: aurl } }); setS(r); setEmsg('Saved ✓'); setTimeout(() => setEmsg(''), 2000); }}>Save</button></div>
+      </div>
       <h3>Danger zone</h3>
-      <button className="btn-danger" style={{ alignSelf: 'flex-start' }} onClick={del}>Delete this workspace</button>
+      <div className="set-group danger">
+        <div className="row between"><div className="col"><b>Delete this workspace</b><span className="muted small">Every page in it moves to trash and the workspace disappears for all members.</span></div>
+          <button className="btn-danger" onClick={del}>Delete</button></div>
+      </div>
     </div>
   );
 }
