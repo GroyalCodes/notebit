@@ -437,11 +437,12 @@ app.post('/api/auth/logout', async (req, reply) => { if (req.cookies?.sid) db.pr
 app.get('/api/version', async () => ({ name: 'NoteBit', version: VERSION }));
 let _upd = { at: 0, data: null };
 app.get('/api/update-check', async () => {
-  if (_upd.data && Date.now() - _upd.at < 3600000) return _upd.data;
+  if (_upd.data && Date.now() - _upd.at < 1800000) return _upd.data;
   let latest = null, url = 'https://github.com/GroyalCodes/notebit/releases';
   try { const r = await fetch('https://api.github.com/repos/GroyalCodes/notebit/releases/latest', { headers: { 'User-Agent': 'notebit', Accept: 'application/vnd.github+json' } }); if (r.ok) { const j = await r.json(); latest = String(j.tag_name || '').replace(/^v/, '') || null; url = j.html_url || url; } } catch {}
-  _upd = { at: Date.now(), data: { current: VERSION, latest, updateAvailable: !!latest && latest !== VERSION, url } };
-  return _upd.data;
+  const data = { current: VERSION, latest, updateAvailable: !!latest && latest !== VERSION, url };
+  if (latest) _upd = { at: Date.now(), data };   // never cache a failed lookup as "up to date"
+  return data;
 });
 app.get('/api/me', async (req, reply) => { const u = userFromReq(req); if (!u) return reply.code(401).send({ error: 'unauthorized' }); return u; });
 
