@@ -105,20 +105,23 @@ cd "$(dirname "$0")"
 EOS
 chmod +x start.sh stop.sh restart.sh
 
-for i in $(seq 1 30); do
-  if curl -fsS "http://localhost:$PORT/api/version" >/dev/null 2>&1; then
-    VERSION=$(curl -fsS "http://localhost:$PORT/api/version" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+for i in $(seq 1 45); do
+  if curl -fsS "http://127.0.0.1:$PORT/api/version" >/dev/null 2>&1; then
+    VERSION=$(curl -fsS "http://127.0.0.1:$PORT/api/version" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
     say ""
-    say "${BOLD}  NoteBit v${VERSION} is alive: http://localhost:$PORT${RESET}"
+    say "${DIM}  ================================================${RESET}"
     say ""
-    say "  First account created becomes the admin. Choose wisely."
+    say "${BOLD}   Install complete. NoteBit v${VERSION} is running.${RESET}"
     say ""
-    say "  Start:   ./$DIR/start.sh        Stop: ./$DIR/stop.sh"
-    say "  Update:  re-run this installer (your data always stays)"
-    say "  Data:    everything lives in $DIR/data."
-    say "           Back that folder up and you can walk away from a burning laptop."
+    say "   Open here:      http://localhost:$PORT"
+    say "   Your notes:     $DIR/data  (back it up, own it forever)"
+    say "   Daily driving:  ./start.sh  ./stop.sh  ./restart.sh  in the $DIR folder"
+    say "   Updating:       re-run this installer, data always stays"
     say ""
-    say "${DIM}  Prefer managed hosting? https://notebit.org${RESET}"
+    say "   First account created becomes the admin. Choose wisely."
+    say ""
+    say "${DIM}  ================================================${RESET}"
+    say "${DIM}  Enjoying it? https://ko-fi.com/V7V81I89ME keeps the dev caffeinated.${RESET}"
     say ""
     exit 0
   fi

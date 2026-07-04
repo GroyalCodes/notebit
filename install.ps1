@@ -138,22 +138,25 @@ call "%~dp0Start NoteBit.bat"
 "@ | Out-File "Restart NoteBit.bat" -Encoding ascii
 
 $up = $false
-for ($i = 0; $i -lt 30; $i++) {
+for ($i = 0; $i -lt 45; $i++) {
   Start-Sleep 1
   try {
-    $v = Invoke-RestMethod "http://localhost:$port/api/version" -TimeoutSec 2
+    $v = Invoke-RestMethod "http://127.0.0.1:$port/api/version" -TimeoutSec 2
     if ($v.version) {
       Write-Host ""
-      Write-Host "  NoteBit v$($v.version) is alive: http://localhost:$port" -ForegroundColor Green
+      Write-Host "  ================================================" -ForegroundColor DarkGray
       Write-Host ""
-      Write-Host "  First account created becomes the admin. Choose wisely."
+      Write-Host "   Install complete. NoteBit v$($v.version) is running." -ForegroundColor Green
       Write-Host ""
-      Write-Host "  Start:   'Start NoteBit.bat'      Stop: 'Stop NoteBit.bat'   (in the $dir folder)"
-      Write-Host "  Update:  re-run this installer (your data always stays)"
-      Write-Host "  Data:    everything lives in $dir\data."
-      Write-Host "           Back that folder up and you can walk away from a burning laptop."
+      Write-Host "   Open here:      http://localhost:$port" -ForegroundColor White
+      Write-Host "   Your notes:     $dir\data  (back it up, own it forever)"
+      Write-Host "   Daily driving:  Start / Stop / Restart NoteBit.bat in the $dir folder"
+      Write-Host "   Updating:       re-run this installer, data always stays"
       Write-Host ""
-      Write-Host "  Prefer managed hosting? https://notebit.org" -ForegroundColor DarkGray
+      Write-Host "   First account created becomes the admin. Choose wisely."
+      Write-Host ""
+      Write-Host "  ================================================" -ForegroundColor DarkGray
+      Write-Host "  Enjoying it? https://ko-fi.com/V7V81I89ME keeps the dev caffeinated." -ForegroundColor DarkGray
       Write-Host ""
       Start-Process "http://localhost:$port"
       $up = $true; break
