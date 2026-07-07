@@ -45,7 +45,7 @@ function Logo({ size = 32 }) {
   );
 }
 const treeSig = (list) => (list || []).map(p => `${p.id}:${p.title}:${p.parent_id}:${p.position}:${p.icon}:${p.is_public}:${p.status}:${p.view}:${p.locked}:${p.list_cards}`).join('|');
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.2.2';
 function PageIcon({ icon, size = 18 }) {
   if (icon && icon.startsWith('dot:')) { const c = icon.slice(4); return <span style={{ width: Math.round(size * 0.62), height: Math.round(size * 0.62), borderRadius: '50%', background: BOARD_COLORS[c] || c || 'var(--muted)', display: 'inline-block', flex: 'none' }} />; }
   if (icon && icon.startsWith('ph:')) { const p = icon.split(':'); const I = PH[p[1]]; if (I) return <I size={size} weight="fill" color={p[2] || undefined} />; }
@@ -1348,7 +1348,9 @@ function Workspaces({ currentWs, onWsChange }) {
   const [efrom, setEfrom] = useState('');
   const [emsg, setEmsg] = useState('');
   const [aurl, setAurl] = useState('');
-  useEffect(() => { api('/admin/settings').then(r => { setS(r); setEfrom(r.mail_from || ''); setAurl(r.app_url || ''); }).catch(() => {}); }, []);
+  const [autostart, setAutostart] = useState(null);
+  useEffect(() => { api('/admin/settings').then(r => { setS(r); setEfrom(r.mail_from || ''); setAurl(r.app_url || ''); }).catch(() => {}); api('/admin/autostart').then(setAutostart).catch(() => {}); }, []);
+  const toggleAutostart = async () => { try { const r = await api('/admin/autostart', { method: 'POST', body: { enabled: !autostart?.enabled } }); setAutostart(r); } catch (e) { setEmsg(e.data?.error || 'error'); setTimeout(() => setEmsg(''), 3000); } };
   useEffect(() => { setName(currentWs?.name || ''); setIcon(currentWs?.icon || 'ph:BookOpen'); }, [currentWs?.id]);
   if (!s) return null;
   const toggle = async () => { const r = await api('/admin/settings', { method: 'PUT', body: { allow_signup: !s.allow_signup } }); setS(r); };
@@ -1384,6 +1386,11 @@ function Workspaces({ currentWs, onWsChange }) {
       </div>
       <h3>Server</h3>
       <div className="set-group">
+        {autostart && (autostart.supported
+          ? <div className="row between"><div className="col"><b>Start on boot</b><span className="muted small">Keep NoteBit running as a background service, and bring it back after a restart.</span></div>
+              <label className="sw"><input type="checkbox" checked={!!autostart.enabled} onChange={toggleAutostart} /><span /></label></div>
+          : <div className="row between"><div className="col"><b>Start on boot</b><span className="muted small">{autostart.managed === 'container' ? 'Managed by the host (Docker restart policy).' : 'Not available on this system.'}</span></div>
+              <span className="role-badge muted small">{autostart.managed === 'container' ? 'Auto' : 'n/a'}</span></div>)}
         <div className="col"><b>Public URL</b><span className="muted small">Used in invite links. Set this when you serve NoteBit on your own domain.</span></div>
         <div className="row gap"><input className="grow" placeholder="https://notes.yourdomain.com" value={aurl} onChange={e => setAurl(e.target.value)} />
           <button className="mini gold" onClick={async () => { const r = await api('/admin/settings', { method: 'PUT', body: { app_url: aurl } }); setS(r); setEmsg('Saved ✓'); setTimeout(() => setEmsg(''), 2000); }}>Save</button></div>

@@ -137,6 +137,10 @@ timeout /t 2 /nobreak >nul
 call "%~dp0Start NoteBit.bat"
 "@ | Out-File "Restart NoteBit.bat" -Encoding ascii
 
+# start on boot by default (Startup-folder launcher); best effort
+$env:WIKI_DB = "$PWD\data\notebit.db"; $env:PORT = $port; $env:HOST = "127.0.0.1"; $env:APP_URL = "http://localhost:$port"
+try { & $node "app\server\server.js" autostart enable *> $null } catch {}
+
 $up = $false
 for ($i = 0; $i -lt 45; $i++) {
   Start-Sleep 1
@@ -152,6 +156,7 @@ for ($i = 0; $i -lt 45; $i++) {
       Write-Host "   Your notes:     $dir\data  (back it up, own it forever)"
       Write-Host "   Daily driving:  Start / Stop / Restart NoteBit.bat in the $dir folder"
       Write-Host "   Updating:       re-run this installer, data always stays"
+      Write-Host "   On boot:        starts automatically (toggle in Settings, Workspace)"
       Write-Host ""
       Write-Host "   First account created becomes the admin. Choose wisely."
       Write-Host ""

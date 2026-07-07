@@ -105,6 +105,9 @@ cd "$(dirname "$0")"
 EOS
 chmod +x start.sh stop.sh restart.sh
 
+# start on boot by default (best effort; systemd user service on Linux, launchd on macOS)
+WIKI_DB="$PWD/data/notebit.db" PORT="$PORT" HOST=127.0.0.1 APP_URL="http://localhost:$PORT" "$NODE" app/server/server.js autostart enable >/dev/null 2>&1 || true
+
 for i in $(seq 1 45); do
   if curl -fsS "http://127.0.0.1:$PORT/api/version" >/dev/null 2>&1; then
     VERSION=$(curl -fsS "http://127.0.0.1:$PORT/api/version" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
@@ -117,6 +120,7 @@ for i in $(seq 1 45); do
     say "   Your notes:     $DIR/data  (back it up, own it forever)"
     say "   Daily driving:  ./start.sh  ./stop.sh  ./restart.sh  in the $DIR folder"
     say "   Updating:       re-run this installer, data always stays"
+    say "   On boot:        starts automatically (toggle in Settings, Workspace)"
     say ""
     say "   First account created becomes the admin. Choose wisely."
     say ""

@@ -13,14 +13,102 @@ import Database from 'better-sqlite3';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.WIKI_DB || path.join(__dirname, 'data', 'wiki.db');
 const PORT = Number(process.env.PORT || 8200);
-const VERSION = '1.2.1';
+const VERSION = '1.2.2';
 const ALLOW_SIGNUP = process.env.ALLOW_SIGNUP !== 'false';
 const WEB_DIR = process.env.WEB_DIR || path.join(__dirname, '..', 'web', 'dist');
+
+// ---------- autostart (start NoteBit on boot; native installs only) ----------
+// enable = register with the OS so NoteBit comes back after a reboot. We never
+// launch a second copy here, so this never conflicts with the running instance.
+const AS = (() => {
+  const inContainer = () => { try { if (fs.existsSync('/.dockerenv')) return true; } catch {} return !!(process.env.FLY_APP_NAME || process.env.KUBERNETES_SERVICE_HOST); };
+  const node = process.execPath;
+  const script = path.join(__dirname, 'server.js');
+  const wd = path.resolve(__dirname, '..', '..');
+  const envVars = () => ({ WIKI_DB: path.resolve(DB_PATH), PORT: String(PORT), HOST: process.env.HOST || '127.0.0.1', APP_URL: process.env.APP_URL || `http://localhost:${PORT}` });
+  const has = (cmd, args) => { try { execFileSync(cmd, args, { stdio: 'ignore' }); return true; } catch { return false; } };
+  const unitPath = () => path.join(os.homedir(), '.config', 'systemd', 'user', 'notebit.service');
+  const plistPath = () => path.join(os.homedir(), 'Library', 'LaunchAgents', 'org.notebit.plist');
+  const vbsPath = () => path.join(process.env.APPDATA || os.homedir(), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'NoteBit.vbs');
+
+  function status() {
+    if (inContainer()) return { supported: false, enabled: false, managed: 'container' };
+    const p = process.platform;
+    try {
+      if (p === 'win32') return { supported: true, enabled: fs.existsSync(vbsPath()) };
+      if (p === 'darwin') return { supported: true, enabled: fs.existsSync(plistPath()) };
+      if (p === 'linux') {
+        // show-environment needs the user bus; if it fails there is no session to manage
+        if (!has('systemctl', ['--user', 'show-environment'])) return { supported: false, enabled: false, managed: 'nosystemd' };
+        let en = false; try { en = execFileSync('systemctl', ['--user', 'is-enabled', 'notebit'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'enabled'; } catch {}
+        return { supported: true, enabled: en };
+      }
+    } catch {}
+    return { supported: false, enabled: false };
+  }
+
+  function enable() {
+    const p = process.platform, e = envVars();
+    if (p === 'linux') {
+      const q = s => (/\s/.test(s) ? `"${s}"` : s);
+      const unit = `[Unit]\nDescription=NoteBit\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=${wd}\nExecStart=${q(node)} ${q(script)}\n${Object.entries(e).map(([k, v]) => `Environment=${k}=${v}`).join('\n')}\nRestart=on-failure\nRestartSec=3\n\n[Install]\nWantedBy=default.target\n`;
+      fs.mkdirSync(path.dirname(unitPath()), { recursive: true });
+      fs.writeFileSync(unitPath(), unit);
+      execFileSync('systemctl', ['--user', 'daemon-reload']);
+      execFileSync('systemctl', ['--user', 'enable', 'notebit']);
+      try { execFileSync('loginctl', ['enable-linger', os.userInfo().username]); } catch {}
+      return true;
+    }
+    if (p === 'darwin') {
+      const envDict = Object.entries(e).map(([k, v]) => `    <key>${k}</key><string>${v}</string>`).join('\n');
+      const plist = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n  <key>Label</key><string>org.notebit</string>\n  <key>ProgramArguments</key><array><string>${node}</string><string>${script}</string></array>\n  <key>WorkingDirectory</key><string>${wd}</string>\n  <key>EnvironmentVariables</key><dict>\n${envDict}\n  </dict>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n</dict></plist>\n`;
+      fs.mkdirSync(path.dirname(plistPath()), { recursive: true });
+      fs.writeFileSync(plistPath(), plist);
+      return true;
+    }
+    if (p === 'win32') {
+      const psq = s => String(s).replace(/'/g, "''");
+      const setEnv = Object.entries(e).map(([k, v]) => `$env:${k}='${psq(v)}'`).join('; ');
+      const ps = `cd '${psq(wd)}'; ${setEnv}; Start-Process -FilePath '${psq(node)}' -ArgumentList '${psq(script)}' -WindowStyle Hidden`;
+      const vbs = `Set sh = CreateObject("WScript.Shell")\r\nsh.Run "powershell -WindowStyle Hidden -Command ""${ps}""", 0, False\r\n`;
+      fs.mkdirSync(path.dirname(vbsPath()), { recursive: true });
+      fs.writeFileSync(vbsPath(), vbs);
+      return true;
+    }
+    return false;
+  }
+
+  function disable() {
+    const p = process.platform;
+    try {
+      if (p === 'linux') { try { execFileSync('systemctl', ['--user', 'disable', 'notebit']); } catch {} fs.rmSync(unitPath(), { force: true }); return true; }
+      if (p === 'darwin') { try { execFileSync('launchctl', ['unload', plistPath()]); } catch {} fs.rmSync(plistPath(), { force: true }); return true; }
+      if (p === 'win32') { fs.rmSync(vbsPath(), { force: true }); return true; }
+    } catch {}
+    return false;
+  }
+
+  return { status, enable, disable };
+})();
+
+// CLI: `node server.js autostart <enable|disable|status>` (used by the installer). Exits before opening the DB.
+if (process.argv[2] === 'autostart') {
+  const cmd = process.argv[3];
+  const st = AS.status();
+  try {
+    if (cmd === 'enable') { if (st.supported) { AS.enable(); console.log('autostart enabled'); } else { console.log('autostart not available here (' + (st.managed || 'unsupported') + ')'); } }
+    else if (cmd === 'disable') { AS.disable(); console.log('autostart disabled'); }
+    else { console.log(JSON.stringify(AS.status())); }
+  } catch (e) { console.log('autostart: ' + e.message); }
+  process.exit(0);
+}
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
@@ -582,6 +670,14 @@ app.post('/api/admin/test-email', async (req, reply) => {
   const u = requireAdmin(req, reply); if (!u) return;
   const r = await sendEmail(u.email, 'NoteBit test email', '<p>Email invites are working. Sent from your NoteBit instance.</p>');
   return { ok: !!r.ok, detail: r.ok ? 'sent to ' + u.email : (r.body?.message || r.error || 'failed') };
+});
+app.get('/api/admin/autostart', async (req, reply) => { if (!requireAdmin(req, reply)) return; return AS.status(); });
+app.post('/api/admin/autostart', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  const st = AS.status();
+  if (!st.supported) return reply.code(400).send({ error: st.managed === 'container' ? 'This install is managed by its host, which already restarts it.' : 'Autostart is not available on this system.' });
+  try { if (req.body?.enabled) AS.enable(); else AS.disable(); return AS.status(); }
+  catch (e) { return reply.code(500).send({ error: e.message }); }
 });
 app.put('/api/admin/settings', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
