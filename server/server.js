@@ -340,7 +340,7 @@ app.get('/collab/:room', { websocket: true }, (socket, req) => {
   const s = sid && db.prepare('SELECT * FROM sessions WHERE token=?').get(sid);
   const user = s && s.expires_at > Date.now() ? db.prepare('SELECT id,is_admin FROM users WHERE id=?').get(s.user_id) : null;
   const room = req.params.room;
-  let ok = false;
+  let ok;
   if (!user) ok = false;
   else if (room.startsWith('tree-')) { const wsId = room.slice(5); ok = user.is_admin || !!db.prepare('SELECT 1 FROM workspace_member WHERE workspace_id=? AND user_id=?').get(wsId, user.id); }
   else ok = access(user, room).view;

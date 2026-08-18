@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import * as GameIcons from 'react-icons/gi';
 import * as Phosphor from '@phosphor-icons/react';
-import { Eye, PencilSimple as Pencil, Crown, X } from '@phosphor-icons/react';
+import { Eye, PencilSimple as Pencil, Crown } from '@phosphor-icons/react';
 import EmojiPicker from 'emoji-picker-react';
 export const ROLE_INFO = { read: { label: 'Read', icon: Eye }, write: { label: 'Write', icon: Pencil }, manage: { label: 'Manage', icon: Crown } };
 export const PH = {};
@@ -20,8 +20,10 @@ export const THEMES = [
   { id: 'forest', name: 'Forest', color: '#5fc18a' },
   { id: 'slate', name: 'Slate', color: '#9aa6c0' },
   { id: 'rose', name: 'Rose', color: '#e08bb0' },
+  { id: 'paper', name: 'Paper', color: '#f3f0f8', light: true },
 ];
-export const applyTheme = (t) => document.documentElement.setAttribute('data-theme', t || 'amethyst');
+export const isLightTheme = () => document.documentElement.getAttribute('data-theme') === 'paper';
+export const applyTheme = (t) => { const id = THEMES.some(x => x.id === t) ? t : 'amethyst'; document.documentElement.setAttribute('data-theme', id); document.documentElement.style.colorScheme = id === 'paper' ? 'light' : 'dark'; };
 export const USER_COLORS = ['#a78bdb', '#6f9fe0', '#5fc18a', '#e08bb0', '#e1a845', '#ff5d52', '#9a6dd7', '#2fb3a8'];
 export const userColor = (id) => USER_COLORS[Math.abs(Number(id) || 0) % USER_COLORS.length];
 export function Logo({ size = 32 }) {
@@ -83,7 +85,7 @@ export function IconPicker({ onPick, onClose }) {
           <span className="ip-rm" onClick={() => { onPick('📄'); onClose(); }}>Reset</span>
         </div>
         {tab === 'emoji'
-          ? <EmojiPicker onEmojiClick={e => { onPick(e.emoji); onClose(); }} theme="dark" emojiStyle="native" width={352} height={358} previewConfig={{ showPreview: false }} skinTonesDisabled lazyLoadEmojis />
+          ? <EmojiPicker onEmojiClick={e => { onPick(e.emoji); onClose(); }} theme={isLightTheme() ? 'light' : 'dark'} emojiStyle="native" width={352} height={358} previewConfig={{ showPreview: false }} skinTonesDisabled lazyLoadEmojis />
           : <div className="icon-tab">
               <input className="icon-search" autoFocus placeholder={`Search ${(iset === 'gi' ? GI_NAMES : PH_NAMES).length.toLocaleString()} ${iset === 'gi' ? 'fantasy' : 'classic'} icons…`} value={q} onChange={e => setQ(e.target.value)} />
               <div className="icon-colors">

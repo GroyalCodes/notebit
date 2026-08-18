@@ -6,7 +6,7 @@ import { WebsocketProvider } from 'y-websocket';
 import JSZip from 'jszip';
 import api from './api.js';
 import { BookOpen, MagnifyingGlass as SearchIcon, Plus, Trash as Trash2, Gear as SettingsIcon, User, Users, Globe, Tag as TagIcon, X, CaretDown as ChevronDown, CaretRight as ChevronRight, PencilSimple as Pencil, Eye, ShareNetwork as Share2, DotsSixVertical as GripVertical, List as Menu, Crown, Lock, LockOpen, DotsThree, LinkSimple, Bell, ChatCircle, ClockCounterClockwise, Heart } from '@phosphor-icons/react';
-import { ROLE_INFO, THEMES, applyTheme, Logo, treeSig, APP_VERSION, PageIcon, BoardGlyph, BOARD_COLORS, IconPicker, parseJSON, parseContent, TAG_COLORS, tagColor, normTags, Avatar, fileToAvatar, fileToCover, useConfirm, ConfirmProvider, Popover, fmtDate, fmtWhen, renderMentions } from './ui.jsx';
+import { ROLE_INFO, THEMES, applyTheme, Logo, treeSig, APP_VERSION, PageIcon, BoardGlyph, BOARD_COLORS, IconPicker, parseJSON, TAG_COLORS, tagColor, normTags, Avatar, fileToAvatar, fileToCover, useConfirm, ConfirmProvider, Popover, fmtDate, fmtWhen, renderMentions } from './ui.jsx';
 import { feedPageMeta, schema, ReadOnly } from './blocks.jsx';
 import { Editor } from './editor.jsx';
 // live registry so mention chips always show the page's CURRENT title/icon
@@ -1079,9 +1079,9 @@ function Workspace({ me, setMe, onLogout }) {
     document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
   };
   const saveTimer = useRef(null);
-  const editorInsertRef = useRef(null);
+  const editorApi = useRef(null);
   const coverInputRef = useRef(null);
-  const onLink = (pageId, x, y) => { const p = pages.find(pp => pp.id === pageId); if (p && editorInsertRef.current) editorInsertRef.current(p, x, y); };
+  const onLink = (pageId, x, y) => { const p = pages.find(pp => pp.id === pageId); if (p && editorApi.current) editorApi.current.insertPageLink(p, x, y); };
   const currentWs = workspaces.find(w => w.id === currentWsId) || workspaces[0] || { name: 'Wiki', icon: 'ph:BookOpen' };
   const [wsMembers, setWsMembers] = useState([]);
   useEffect(() => { if (currentWsId) api('/workspaces/' + currentWsId + '/members').then(setWsMembers).catch(() => setWsMembers([])); }, [currentWsId]);
@@ -1261,7 +1261,7 @@ function Workspace({ me, setMe, onLogout }) {
                 {crumbs.map(c => <span className="crumb" key={c.id} onClick={() => setCurrentId(c.id)}><ChevronRight size={13} className="cr-sep" /><PageIcon icon={c.icon} size={14} /><span className="cr-txt">{c.title || 'Untitled'}</span></span>)}
               </div>
               <div className="page-bar-right">
-                {page.locked && <span className="chip-mini" title={page.can_admin ? 'Locked — read-only' : 'Locked by a manager'}><Lock size={11} weight="fill" /> Locked</span>}
+                {!!page.locked && <span className="chip-mini" title={page.can_admin ? 'Locked — read-only' : 'Locked by a manager'}><Lock size={11} weight="fill" /> Locked</span>}
                 {!page.can_edit && !page.locked && <span className="chip-mini"><Eye size={11} /> View only</span>}
                 <FacePile members={wsMembers} onClick={() => page.can_admin && setSharing(true)} />
                 {page.can_admin && <button className="btn-share" onClick={() => setSharing(true)}><Share2 size={13} /> Share</button>}
@@ -1293,7 +1293,7 @@ function Workspace({ me, setMe, onLogout }) {
                 </>
                 : <>
                 <Properties tags={tags} editable={!!page.can_edit} workspace={currentWsId} onTagClick={(name, color) => setTagFilter({ name, color })} onChange={(t) => { setPage({ ...page, tags: JSON.stringify(t) }); save({ tags: t }); }} />
-                <Editor page={page} editable={!!page.can_edit} pages={pages} insertRef={editorInsertRef} me={me} onChange={(content) => save({ content })} />
+                <Editor page={page} editable={!!page.can_edit} pages={pages} apiRef={editorApi} me={me} onChange={(content) => save({ content })} />
                 {backlinks.length > 0 && <div className="backlinks">
                   <div className="bl-head clickable" onClick={() => setBlOpen(v => !v)}>{blOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />} Linked references <span className="muted">({backlinks.length})</span></div>
                   {blOpen && backlinks.map(b => <div className="bl" key={b.id} onClick={() => setCurrentId(b.id)}><PageIcon icon={b.icon} size={14} /><span>{b.title || 'Untitled'}</span></div>)}

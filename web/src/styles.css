@@ -327,9 +327,12 @@ a.bcard { text-decoration: none; color: var(--text); }
 .callout-content { flex: 1; padding-top: 2px; min-width: 0; min-height: 1.6em; cursor: text; }
 .callout-emoji { flex: none; }
 /* emoji sits in a small tile on the left, Notion-style */
-.ce-btn { cursor: pointer; font-size: 17px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 6px; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.09); }
+.ce-btn { cursor: pointer; font-size: 17px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border-radius: 6px; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.09); font-family: inherit; flex: none; user-select: none; }
+.callout:not(:has(.ce-btn[title=""])) .ce-btn:hover { background: rgba(255,255,255,.14); }
+.ce-btn[title=""] { cursor: default; }
 .ce-btn:hover { background: rgba(255,255,255,.14); }
 .ce-pop { position: absolute; z-index: 2001; top: 38px; left: 6px; background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 8px; box-shadow: 0 16px 44px rgba(0,0,0,.55); }
+.ce-pop.portal { position: fixed; top: auto; left: auto; z-index: 3001; animation: popin .1s ease; }
 .ce-colors { display: flex; gap: 7px; padding: 3px 6px 9px; flex-wrap: wrap; }
 .callout-color { position: absolute; top: 10px; right: 10px; opacity: 0; }
 .callout:hover .callout-color { opacity: .65; }
@@ -594,6 +597,7 @@ a.bcard { text-decoration: none; color: var(--text); }
 .tg-btn svg { transition: transform .14s ease; transform: rotate(90deg); }
 .toggle-blk.closed .tg-btn svg { transform: rotate(0deg); }
 .tg-title { flex: 1; min-width: 0; font-weight: 600; }
+.bn-block:has(> .bn-block-content > .toggle-blk.closed) > .bn-block-group { display: none; }
 .tg-title .bn-inline-content:empty::after { content: ''; }
 
 /* quote block */
@@ -613,6 +617,12 @@ a.bcard { text-decoration: none; color: var(--text); }
 .ctx-fmt button:hover { background: var(--hover); color: var(--text); }
 .ctx-kbd { margin-left: auto; font-size: 10.5px; color: var(--muted); }
 .ctx-menu .tim-sub { z-index: 3002; max-height: 320px; overflow-y: auto; }
+.ctx-menu .tim-parent.popmenu-item { padding: 7px 12px; }
+.color-sub { min-width: 214px; padding: 6px 8px 8px; }
+.color-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 2px 0 6px; }
+.color-dot { width: 32px; height: 28px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); font-weight: 700; font-size: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-family: inherit; }
+.color-dot:hover { border-color: var(--accent-dim); }
+.color-dot.bg { color: var(--muted); }
 /* selection: text + whole-block */
 .bn-editor ::selection { background: color-mix(in srgb, var(--accent) 34%, transparent); }
 .bn-editor .ProseMirror-selectednode > .bn-block > .bn-block-content,
@@ -663,6 +673,12 @@ a.bcard { text-decoration: none; color: var(--text); }
 .clog-line { font-size: 13px; color: var(--text-dim); line-height: 1.45; overflow-wrap: anywhere; }
 .clog-line b { color: var(--text); font-weight: 600; }
 
+/* drop indicator: drawn from the same seam the drop uses, so it never lies */
+.drop-ind { position: absolute; display: none; height: 3px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 70%, transparent); pointer-events: none; z-index: 45; }
+.editor-wrap.handle-drag .prosemirror-dropcursor-block, .editor-wrap.handle-drag .prosemirror-dropcursor-inline { display: none !important; }
+/* "copy link to block" target flash */
+.blk-flash { animation: blkflash 1.5s ease-out; border-radius: 4px; }
+@keyframes blkflash { 0% { background: color-mix(in srgb, var(--accent) 35%, transparent); } 100% { background: transparent; } }
 /* box (marquee) selection */
 .editor-wrap { position: relative; }
 .box-rect { position: absolute; z-index: 40; background: color-mix(in srgb, var(--accent) 10%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 4px; pointer-events: none; }
@@ -699,6 +715,7 @@ a.bcard { text-decoration: none; color: var(--text); }
 .bn-block-content[data-content-type="bulletListItem"] .bn-inline-content::before { color: var(--accent-dim); }
 .bn-block-content[data-content-type="numberedListItem"] .bn-inline-content::before { color: var(--accent-dim); }
 .bn-editor input[type="checkbox"] { accent-color: var(--accent); }
+.bn-block-content[data-content-type="checkListItem"][data-checked="true"] > .bn-inline-content { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
 /* dividers + quotes + images */
 .bn-editor hr { border: none; height: 1px; background: var(--line2); margin: 14px 0; }
 .bn-editor img { border-radius: 9px; max-width: 100%; }
