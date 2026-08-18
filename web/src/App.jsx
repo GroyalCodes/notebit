@@ -5,7 +5,7 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import JSZip from 'jszip';
 import api from './api.js';
-import { BookOpen, MagnifyingGlass as SearchIcon, Plus, Trash as Trash2, Gear as SettingsIcon, User, Users, Globe, Tag as TagIcon, X, CaretDown as ChevronDown, CaretRight as ChevronRight, PencilSimple as Pencil, Eye, ShareNetwork as Share2, DotsSixVertical as GripVertical, List as Menu, Crown, Lock, LockOpen, DotsThree, LinkSimple, Bell, ChatCircle, ClockCounterClockwise, Heart } from '@phosphor-icons/react';
+import { BookOpen, MagnifyingGlass as SearchIcon, Plus, Trash as Trash2, Gear as SettingsIcon, User, Users, Globe, Tag as TagIcon, X, CaretDown as ChevronDown, CaretRight as ChevronRight, PencilSimple as Pencil, Eye, ShareNetwork as Share2, DotsSixVertical as GripVertical, List as Menu, Crown, Lock, LockOpen, DotsThree, LinkSimple, Bell, ChatCircle, ClockCounterClockwise, Heart, Star, CopySimple, DownloadSimple, ListBullets, ArrowSquareOut } from '@phosphor-icons/react';
 import { ROLE_INFO, THEMES, applyTheme, Logo, treeSig, APP_VERSION, PageIcon, BoardGlyph, BOARD_COLORS, IconPicker, parseJSON, TAG_COLORS, tagColor, normTags, Avatar, fileToAvatar, fileToCover, useConfirm, ConfirmProvider, Popover, fmtDate, fmtWhen, renderMentions } from './ui.jsx';
 import { feedPageMeta, schema, ReadOnly } from './blocks.jsx';
 import { Editor } from './editor.jsx';
@@ -112,7 +112,7 @@ function Login({ onAuth, ws }) {
 }
 
 // ---------- sidebar tree — pointer-based drag & drop ----------
-function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, canManage, collapsedInit, onCollapse }) {
+function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, onContext, canManage, collapsedInit, onCollapse }) {
   const [over, setOver] = useState(null);          // { id, zone } drop indicator
   const [drag, setDrag] = useState(null);          // page being dragged (floating preview)
   const [pos, setPos] = useState({ x: 0, y: 0 });
@@ -182,6 +182,7 @@ function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, canMa
           data-id={p.id}
           style={{ paddingLeft: 6 + depth * 13 }}
           onMouseDown={e => { if (e.button !== 0 || e.target.closest('button, .twist')) return; di.current = { id: p.id, startX: e.clientX, startY: e.clientY, active: false }; }}
+          onContextMenu={e => { if (!onContext) return; e.preventDefault(); onContext(p.id, e.clientX, e.clientY); }}
         >
           {dz === 'before' && <span className="drop-line top" />}
           {dz === 'after' && <span className="drop-line bot" />}
@@ -267,16 +268,41 @@ function Properties({ tags, editable, workspace, onChange, onTagClick }) {
 
 // ---------- editor ----------
 // ---------- search (⌘K) ----------
-function Search({ workspace, onOpen, onClose }) {
-  const [q, setQ] = useState(''); const [res, setRes] = useState([]);
-  useEffect(() => { const id = setTimeout(() => { q.trim() ? api('/search?q=' + encodeURIComponent(q) + (workspace ? '&workspace=' + workspace : '')).then(setRes).catch(() => {}) : setRes([]); }, 150); return () => clearTimeout(id); }, [q]);
+function Search({ workspace, recent, pages, onOpen, onClose }) {
+  const [q, setQ] = useState(''); const [res, setRes] = useState([]); const [hi, setHi] = useState(0);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (!q.trim()) { setRes([]); setHi(0); return; }
+    setLoading(true);
+    const id = setTimeout(() => api('/search?q=' + encodeURIComponent(q.trim()) + (workspace ? '&workspace=' + workspace : '')).then(r => { setRes(r); setHi(0); }).catch(() => {}).finally(() => setLoading(false)), 120);
+    return () => clearTimeout(id);
+  }, [q]);
+  const recents = !q.trim() ? (recent || []).map(id => pages.find(p => p.id === id)).filter(p => p && p.view !== 'column').slice(0, 8).map(p => ({ id: p.id, title: p.title, icon: p.icon })) : null;
+  const list = recents || res;
+  const open = (r) => { if (!r) return; onOpen(r.id); onClose(); };
+  const listRef = useRef(null);
+  useEffect(() => { listRef.current?.children?.[hi]?.scrollIntoView?.({ block: 'nearest' }); }, [hi]);
+  const mark = (text) => { const ql = q.trim().toLowerCase(); if (!text) return null; const i = ql ? text.toLowerCase().indexOf(ql) : -1; if (i < 0) return text; return <>{text.slice(0, i)}<mark>{text.slice(i, i + ql.length)}</mark>{text.slice(i + ql.length)}</>; };
   return (
     <div className="modal-bg top" onClick={onClose}>
       <div className="card search-box" onClick={e => e.stopPropagation()}>
-        <input autoFocus placeholder="Search pages…" value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') onClose(); }} />
-        <div className="search-res">
-          {res.map(r => <div className="sr" key={r.id} onClick={() => { onOpen(r.id); onClose(); }}><span className="ic"><PageIcon icon={r.icon} size={16} /></span>{r.title || 'Untitled'} <span className="muted small">· {r.where}</span></div>)}
-          {q && res.length === 0 && <div className="muted small pad">No matches</div>}
+        <div className="search-in"><SearchIcon size={17} className="muted" /><input autoFocus placeholder="Search pages and text…" value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => {
+          if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
+          else if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(h + 1, list.length - 1)); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(0, h - 1)); }
+          else if (e.key === 'Enter') { e.preventDefault(); open(list[hi]); }
+        }} /><kbd>esc</kbd></div>
+        <div className="search-res" ref={listRef}>
+          {recents && recents.length > 0 && <div className="sr-head">Recent</div>}
+          {list.map((r, i) => <div className={'sr' + (i === hi ? ' hi' : '')} key={r.id} onMouseEnter={() => setHi(i)} onClick={() => open(r)}>
+            <span className="ic"><PageIcon icon={r.icon} size={17} /></span>
+            <span className="sr-main">
+              <span className="sr-title">{mark(r.title || 'Untitled')}{r.parent ? <span className="sr-parent"> · {r.parent}</span> : null}</span>
+              {r.snippet ? <span className="sr-snip">{mark(r.snippet)}</span> : null}
+            </span>
+          </div>)}
+          {q.trim() && !loading && res.length === 0 && <div className="muted small pad sr-empty">No pages match “{q.trim()}”</div>}
+          {!q.trim() && (!recents || recents.length === 0) && <div className="muted small pad sr-empty">Search titles and page text. <kbd className="kbd-inl">↑</kbd> <kbd className="kbd-inl">↓</kbd> to move, <kbd className="kbd-inl">↵</kbd> to open.</div>}
         </div>
       </div>
     </div>
@@ -912,17 +938,62 @@ function TagView({ tag, color, workspace, onOpen, onClose }) {
     </div>
   );
 }
-function PageMenu({ page, canManage, onLock, onDelete, onLog }) {
+function PageMenu({ page, canManage, canEdit, isFav, wordCount, onFav, onLock, onDelete, onLog, onVersions, onDuplicate, onExport, onCopyLink }) {
   return (
-    <Popover width={226} align="right" trigger={<button className="icon-btn" title="Page options"><DotsThree size={20} weight="bold" /></button>}>
+    <Popover width={236} align="right" trigger={<button className="icon-btn" title="Page options"><DotsThree size={20} weight="bold" /></button>}>
       {(close) => <>
-        <div className="popmenu-info">Edited {fmtDate(page.updated_at)}{page.is_public ? <span className="pm-pub"><Globe size={11} /> Published</span> : null}</div>
-        <div className="popmenu-item" onClick={() => { close(); onLog(); }}><ClockCounterClockwise size={15} /> Changelog</div>
+        <div className="popmenu-info">
+          <span>Edited {fmtDate(page.updated_at)}{page.is_public ? <span className="pm-pub"> · <Globe size={11} /> Published</span> : null}</span>
+          {page.view !== 'board' && <span>{wordCount} word{wordCount === 1 ? '' : 's'}</span>}
+        </div>
+        <div className="popmenu-item" onClick={() => { close(); onFav(); }}><Star size={15} weight={isFav ? 'fill' : 'regular'} /> {isFav ? 'Remove from favorites' : 'Add to favorites'}</div>
+        <div className="popmenu-item" onClick={() => { close(); onCopyLink(); }}><LinkSimple size={15} /> Copy link</div>
+        {page.is_public && <div className="popmenu-item" onClick={() => { navigator.clipboard?.writeText(location.origin + '/p/' + page.id).catch(() => {}); close(); }}><Globe size={15} /> Copy public link</div>}
+        <div className="popmenu-sep" />
+        {canManage && <div className="popmenu-item" onClick={() => { close(); onDuplicate(); }}><CopySimple size={15} /> Duplicate</div>}
+        {page.view !== 'board' && <div className="popmenu-item" onClick={() => { close(); onExport(); }}><DownloadSimple size={15} /> Export as Markdown</div>}
+        {page.view !== 'board' && <div className="popmenu-item" onClick={() => { close(); onVersions(); }}><ClockCounterClockwise size={15} /> Version history</div>}
+        <div className="popmenu-item" onClick={() => { close(); onLog(); }}><ListBullets size={15} /> Changelog</div>
         {canManage && <div className="popmenu-item" onClick={() => { onLock(); close(); }}><span className="lock-ico" key={page.locked ? 'l' : 'u'}>{page.locked ? <Lock size={15} weight="fill" /> : <LockOpen size={15} weight="fill" />}</span> {page.locked ? 'Unlock page' : 'Lock (read-only)'}</div>}
-        {page.is_public && <div className="popmenu-item" onClick={() => { navigator.clipboard?.writeText(location.origin + '/p/' + page.id).catch(() => {}); close(); }}><LinkSimple size={15} /> Copy public link</div>}
         {canManage && <><div className="popmenu-sep" /><div className="popmenu-item danger" onClick={() => { close(); onDelete(); }}><Trash2 size={15} /> Delete page</div></>}
       </>}
     </Popover>
+  );
+}
+// ---------- version history ----------
+function Versions({ page, canEdit, onRestore, onClose }) {
+  const [items, setItems] = useState(null);
+  const [sel, setSel] = useState(null);       // { id, title, content, created_at }
+  const [busy, setBusy] = useState(false);
+  const load = () => api('/pages/' + page.id + '/versions').then(setItems).catch(() => setItems([]));
+  useEffect(() => { setItems(null); setSel(null); load(); }, [page.id]);
+  const open = (v) => api('/versions/' + v.id).then(setSel).catch(() => {});
+  const saveNow = async () => { setBusy(true); try { await api('/pages/' + page.id + '/versions', { method: 'POST' }); await load(); } finally { setBusy(false); } };
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="card versions" onClick={e => e.stopPropagation()}>
+        <div className="ver-list">
+          <div className="clog-head"><ClockCounterClockwise size={16} /> Version history<span className="grow" />{canEdit && <button className="mini" disabled={busy} onClick={saveNow}>{busy ? '…' : 'Save version now'}</button>}</div>
+          <div className="ver-items">
+            {items === null && <div className="muted small clog-empty">Loading…</div>}
+            {items && items.length === 0 && <div className="muted small clog-empty">No versions yet. NoteBit keeps a snapshot before edits (at most one every 10 minutes), or save one by hand.</div>}
+            {(items || []).map(v => <div key={v.id} className={'ver-item' + (sel?.id === v.id ? ' on' : '')} onClick={() => open(v)}>
+              <div className="ver-when">{fmtWhen(v.created_at)} <span className="muted">· {new Date(String(v.created_at).replace(' ', 'T') + 'Z').toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span></div>
+              <div className="muted small row gap"><Avatar user={v.user} size={16} /> {v.user?.name}{v.title !== page.title ? <> · “{v.title || 'Untitled'}”</> : null}</div>
+            </div>)}
+          </div>
+        </div>
+        <div className="ver-preview">
+          <div className="ver-preview-head">
+            <span className="muted small">{sel ? 'Preview from ' + fmtWhen(sel.created_at) : 'Pick a version to preview it'}</span>
+            <span className="grow" />
+            {sel && canEdit && <button className="btn-gold mini-gold" onClick={() => onRestore(sel.content)}>Restore this version</button>}
+            <X size={17} className="x" onClick={onClose} />
+          </div>
+          <div className="ver-preview-body">{sel ? <ReadOnly key={sel.id} content={sel.content} /> : <div className="muted small pad">Restoring keeps a snapshot of the current text first, so nothing is lost.</div>}</div>
+        </div>
+      </div>
+    </div>
   );
 }
 function Changelog({ pageId, onClose }) {
@@ -1026,25 +1097,28 @@ function Workspace({ me, setMe, onLogout }) {
   const confirm = useConfirm();
   const [pages, setPages] = useState([]);
   useEffect(() => { feedPageMeta(pages); }, [pages]);
-  const [workspaces, setWorkspaces] = useState([]);
+  const [workspaces, setWorkspaces] = useState(null); // null = not loaded yet
   const [currentWsId, setCurrentWsId] = useState(() => localStorage.getItem('wsId') || null);
   const [wsPicker, setWsPicker] = useState(false);
   const [wsMenu, setWsMenu] = useState(false);
   const [wsModal, setWsModal] = useState(false);
   const [users, setUsers] = useState([]);
-  const [currentId, setCurrentId] = useState(null);
+  // pages have real URLs (/page/<id>, optional #blockId), so refresh, back/forward and
+  // shared links all work
+  const pageIdFromUrl = () => (location.pathname.match(/^\/page\/([\w-]+)/) || [])[1] || null;
+  const [currentId, setCurrentId] = useState(pageIdFromUrl);
   const currentIdRef = useRef(null); currentIdRef.current = currentId;
   const popRef = useRef(false);
   useEffect(() => {
-    history.replaceState({ pageId: currentId }, '');
-    const onPop = (e) => { popRef.current = true; setCurrentId(e.state?.pageId ?? null); };
+    history.replaceState({ pageId: currentId }, '', currentId ? '/page/' + currentId + location.hash : '/');
+    const onPop = (e) => { popRef.current = true; setCurrentId(e.state?.pageId ?? pageIdFromUrl()); };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
   useEffect(() => {
     if (popRef.current) { popRef.current = false; return; }
     if (history.state && history.state.pageId === currentId) return;
-    history.pushState({ pageId: currentId }, '');
+    history.pushState({ pageId: currentId }, '', currentId ? '/page/' + currentId : '/');
   }, [currentId]);
   const [page, setPage] = useState(null);
   const [sharing, setSharing] = useState(false);
@@ -1055,6 +1129,11 @@ function Workspace({ me, setMe, onLogout }) {
   const [iconPicker, setIconPicker] = useState(false);
   const [backlinks, setBacklinks] = useState([]);
   const [blOpen, setBlOpen] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [treeMenu, setTreeMenu] = useState(null); // { id, x, y }
+  const titleRef = useRef(null);
+  const focusTitleNext = useRef(false);
+  const narrow = () => window.matchMedia('(max-width: 760px)').matches;
   // per-user UI prefs (tree collapse, sidebar open/width) saved to the account, debounced
   const prefs = useMemo(() => { try { return JSON.parse(me.prefs || '{}'); } catch { return {}; } }, []);
   const prefsRef = useRef(prefs);
@@ -1064,7 +1143,12 @@ function Workspace({ me, setMe, onLogout }) {
     clearTimeout(prefTimer.current);
     prefTimer.current = setTimeout(() => api('/me', { method: 'PUT', body: { prefs: prefsRef.current } }).catch(() => {}), 700);
   };
-  const [sidebar, setSidebar] = useState(prefs.sidebar !== false);
+  const [sidebar, setSidebar] = useState(() => prefs.sidebar !== false && !narrow());
+  const setSidebarOpen = (v) => { setSidebar(v); if (!narrow()) savePref({ sidebar: v }); };
+  const [favs, setFavs] = useState(() => Array.isArray(prefs.favs) ? prefs.favs : []);
+  const toggleFav = (id) => setFavs(f => { const n = f.includes(id) ? f.filter(x => x !== id) : [...f, id]; savePref({ favs: n }); return n; });
+  const [recent, setRecent] = useState(() => Array.isArray(prefs.recent) ? prefs.recent : []);
+  const noteRecent = (id) => setRecent(r => { const n = [id, ...r.filter(x => x !== id)].slice(0, 10); savePref({ recent: n }); return n; });
   const [sbWidth, setSbWidth] = useState(() => Math.max(200, Math.min(480, prefs.sbWidth || 260)));
   const startSbResize = (e) => {
     e.preventDefault();
@@ -1082,7 +1166,8 @@ function Workspace({ me, setMe, onLogout }) {
   const editorApi = useRef(null);
   const coverInputRef = useRef(null);
   const onLink = (pageId, x, y) => { const p = pages.find(pp => pp.id === pageId); if (p && editorApi.current) editorApi.current.insertPageLink(p, x, y); };
-  const currentWs = workspaces.find(w => w.id === currentWsId) || workspaces[0] || { name: 'Wiki', icon: 'ph:BookOpen' };
+  const noWorkspace = workspaces && workspaces.length === 0;
+  const currentWs = (workspaces || []).find(w => w.id === currentWsId) || (workspaces || [])[0] || { name: noWorkspace ? 'No workspace' : '…', icon: 'ph:BookOpen' };
   const [wsMembers, setWsMembers] = useState([]);
   useEffect(() => { if (currentWsId) api('/workspaces/' + currentWsId + '/members').then(setWsMembers).catch(() => setWsMembers([])); }, [currentWsId]);
   const canManage = me.is_admin === 1 || wsMembers.find(m => m.id === me.id)?.role === 'manage';
@@ -1119,11 +1204,78 @@ function Workspace({ me, setMe, onLogout }) {
   const createWs = async ({ name, icon }) => { const w = await api('/workspaces', { method: 'POST', body: { name, icon } }); await loadWs(); switchWs(w.id); setWsModal(false); };
   useEffect(() => { loadWs(); api('/users').then(setUsers).catch(() => {}); }, []);
   useEffect(() => { if (currentWsId) refreshTree(); }, [currentWsId]);
-  useEffect(() => { if (!currentId) { setPage(null); return; } api('/pages/' + currentId).then(p => { if (p.view === 'column' && p.parent_id) setCurrentId(p.parent_id); else setPage(p); }).catch(() => setPage(null)); }, [currentId]);
+  useEffect(() => {
+    if (!currentId) { setPage(null); return; }
+    api('/pages/' + currentId).then(p => {
+      if (p.view === 'column' && p.parent_id) { setCurrentId(p.parent_id); return; }
+      if (p.workspace_id && p.workspace_id !== currentWsId) { localStorage.setItem('wsId', p.workspace_id); setCurrentWsId(p.workspace_id); }
+      setPage(p); noteRecent(p.id);
+      if (narrow()) setSidebar(false);
+    }).catch(() => setPage(null));
+  }, [currentId]);
+  // "#blockId" deep links: scroll + flash once the editor has synced
+  useEffect(() => {
+    const hash = location.hash.slice(1); if (!page || !hash) return;
+    let tries = 0; const t = setInterval(() => { if (editorApi.current?.scrollToBlock(hash) || ++tries > 30) { clearInterval(t); if (tries <= 30) history.replaceState(history.state, '', location.pathname); } }, 150);
+    return () => clearInterval(t);
+  }, [page?.id]);
+  useEffect(() => { if (page && focusTitleNext.current) { focusTitleNext.current = false; setTimeout(() => { titleRef.current?.focus(); titleRef.current?.select?.(); }, 30); } }, [page?.id]);
   useEffect(() => { if (!currentId) { setBacklinks([]); return; } api('/pages/' + currentId + '/backlinks').then(setBacklinks).catch(() => setBacklinks([])); }, [currentId]);
-  useEffect(() => { const h = (e) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setSearching(true); } }; window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h); }, []);
+  // shortcuts: ⌘K search · ⌘\ sidebar · ⌘⇧N new page (managers) · Esc closes the top-most panel
+  const closersRef = useRef(null);
+  closersRef.current = () => {
+    if (searching) return setSearching(false);
+    if (tagFilter) return setTagFilter(null);
+    if (treeMenu) return setTreeMenu(null);
+    if (sharing) return setSharing(false);
+    if (versionsOpen) return setVersionsOpen(false);
+    if (logOpen) return setLogOpen(false);
+    if (settings) return setSettings(false);
+    if (wsModal) return setWsModal(false);
+    return false;
+  };
+  const shortcutRef = useRef(null);
+  useEffect(() => {
+    const h = (e) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); setSearching(v => !v); }
+      else if (mod && e.key === '\\') { e.preventDefault(); setSidebar(v => { if (!narrow()) savePref({ sidebar: !v }); return !v; }); }
+      else if (mod && e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); shortcutRef.current?.newPage?.(); }
+      else if (e.key === 'Escape') { if (closersRef.current?.() !== false) e.preventDefault(); }
+    };
+    window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h);
+  }, []);
 
-  const newPage = async (parent_id = null) => { const p = await api('/pages', { method: 'POST', body: { parent_id, title: 'Untitled', workspace_id: currentWsId } }); await refreshTree(); bumpTree(); setCurrentId(p.id); };
+  const newPage = async (parent_id = null) => { const p = await api('/pages', { method: 'POST', body: { parent_id, title: '', workspace_id: currentWsId } }); await refreshTree(); bumpTree(); focusTitleNext.current = true; setCurrentId(p.id); };
+  shortcutRef.current = { newPage: () => { if (canManage) newPage(null); } };
+  const pageUrl = (id) => location.origin + '/page/' + id;
+  const copyLink = (id) => navigator.clipboard?.writeText(pageUrl(id)).catch(() => {});
+  // duplicate: content comes from the live editor when it is the open page (unsaved keystrokes included)
+  const duplicatePage = async (id) => {
+    const src = await api('/pages/' + id);
+    const content = (page && page.id === id && editorApi.current?.getContent()) || src.content || '[]';
+    const p = await api('/pages', { method: 'POST', body: { parent_id: src.parent_id, title: (src.title || 'Untitled') + ' (copy)', workspace_id: currentWsId } });
+    await api('/pages/' + p.id, { method: 'PUT', body: { content, icon: src.icon, tags: parseJSON(src.tags, []), cover: src.cover, description: src.description, view: src.view === 'board' ? 'doc' : src.view } });
+    await refreshTree(); bumpTree(); setCurrentId(p.id);
+  };
+  const exportMarkdown = async () => {
+    if (!page) return;
+    const md = (await editorApi.current?.toMarkdown()) || '';
+    const blob = new Blob([`# ${page.title || 'Untitled'}\n\n${md}`], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = (page.title || 'Untitled').replace(/[\/\\:*?"<>|]/g, '-').slice(0, 80) + '.md'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+  const uploadFile = async (file) => {
+    const r = await fetch('/api/upload', { method: 'POST', credentials: 'include', headers: { 'Content-Type': file.type && /^image\//.test(file.type) ? file.type : 'application/octet-stream' }, body: file });
+    if (!r.ok) { let m = 'upload failed'; try { m = (await r.json()).error || m; } catch {} throw new Error(m); }
+    return (await r.json()).url;
+  };
+  const restoreVersion = async (content) => {
+    const blocks = parseJSON(content, null);
+    if (!Array.isArray(blocks) || !editorApi.current) return;
+    await api('/pages/' + page.id + '/versions', { method: 'POST' }); // keep a snapshot of "now" before restoring
+    editorApi.current.replaceAll(blocks.length ? blocks : [{ type: 'paragraph' }]);
+    setVersionsOpen(false);
+  };
   const del = async (id) => { await api('/pages/' + id, { method: 'DELETE' }); if (currentId === id) setCurrentId(null); refreshTree(); bumpTree(); };
   const move = async (dragId, targetId, zone) => {
     let parent_id, position;
@@ -1141,11 +1293,28 @@ function Workspace({ me, setMe, onLogout }) {
     catch { /* rejected (e.g. locked / read-only target) — refreshTree below reverts the optimistic move */ }
     refreshTree(); bumpTree();
   };
-  const save = (patch) => { clearTimeout(saveTimer.current); saveTimer.current = setTimeout(async () => {
-    const u = await api('/pages/' + page.id, { method: 'PUT', body: patch });
-    setPages(ps => ps.map(p => p.id === u.id ? { ...p, title: u.title, icon: u.icon, is_public: u.is_public } : p));
-    if (patch.title !== undefined || patch.icon !== undefined) bumpTree();
-  }, 450); };
+  // debounced save; pending fields are MERGED, so a title change followed quickly by
+  // typing in the body (or vice versa) never drops one of them. Flushes on page switch/unload.
+  const pendingRef = useRef({ id: null, patch: null });
+  const flushSave = async () => {
+    clearTimeout(saveTimer.current);
+    const { id, patch } = pendingRef.current; if (!id || !patch) return;
+    pendingRef.current = { id: null, patch: null };
+    try {
+      const u = await api('/pages/' + id, { method: 'PUT', body: patch });
+      setPages(ps => ps.map(p => p.id === u.id ? { ...p, title: u.title, icon: u.icon, is_public: u.is_public } : p));
+      if (patch.title !== undefined || patch.icon !== undefined) bumpTree();
+    } catch (e) { if (import.meta.env.DEV) console.warn('save failed', e); }
+  };
+  const flushRef = useRef(flushSave); flushRef.current = flushSave;
+  const save = (patch) => {
+    if (!page) return;
+    if (pendingRef.current.id && pendingRef.current.id !== page.id) flushRef.current();
+    pendingRef.current = { id: page.id, patch: { ...(pendingRef.current.patch || {}), ...patch } };
+    clearTimeout(saveTimer.current); saveTimer.current = setTimeout(() => flushRef.current(), 450);
+  };
+  useEffect(() => { return () => { flushRef.current(); }; }, [page?.id]);
+  useEffect(() => { const h = () => { const { id, patch } = pendingRef.current; if (id && patch) { pendingRef.current = { id: null, patch: null }; try { fetch('/api/pages/' + id, { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch), keepalive: true }); } catch {} } }; window.addEventListener('pagehide', h); return () => window.removeEventListener('pagehide', h); }, []);
   const pickCover = async (e) => { const f = e.target.files?.[0]; if (!f) return; const data = await fileToCover(f); setPage(pg => ({ ...pg, cover: data })); save({ cover: data }); e.target.value = ''; };
   const setCover = (v) => { setPage(pg => ({ ...pg, cover: v })); save({ cover: v }); };
   const [templates, setTemplates] = useState([]);
@@ -1206,7 +1375,7 @@ function Workspace({ me, setMe, onLogout }) {
                 {wsMenu && <>
                   <div className="picker-overlay" onClick={e => { e.stopPropagation(); setWsMenu(false); }} />
                   <div className="ws-menu" onClick={e => e.stopPropagation()}>
-                    {workspaces.map(w => <div className={'ws-item' + (w.id === currentWsId ? ' on' : '')} key={w.id} onClick={() => switchWs(w.id)}><PageIcon icon={w.icon} size={17} /><span className="grow">{w.name}</span></div>)}
+                    {(workspaces || []).map(w => <div className={'ws-item' + (w.id === currentWsId ? ' on' : '')} key={w.id} onClick={() => switchWs(w.id)}><PageIcon icon={w.icon} size={17} /><span className="grow">{w.name}</span></div>)}
                     {me.is_admin === 1 && <div className="ws-item new" onClick={() => { setWsMenu(false); setWsModal(true); }}><Plus size={15} /> New workspace</div>}
                   </div>
                 </>}
@@ -1215,13 +1384,18 @@ function Workspace({ me, setMe, onLogout }) {
             <span className="row" style={{ gap: 2 }}>
               <Inbox onOpen={setCurrentId} />
               <button className="icon-btn" onClick={() => setSearching(true)} title="Search (⌘K)"><SearchIcon size={18} /></button>
-              <button className="icon-btn" onClick={() => { setSidebar(false); savePref({ sidebar: false }); }} title="Collapse sidebar"><Menu size={18} /></button>
+              <button className="icon-btn" onClick={() => setSidebarOpen(false)} title="Collapse sidebar (⌘\)"><Menu size={18} /></button>
             </span>
           </div>
         </div>
         <div className="tree-scroll">
           <div className={'root-node' + (!currentId ? ' on' : '')} onClick={() => setCurrentId(null)} title="Workspace overview & map"><Share2 size={17} /><span>Overview</span></div>
-          <Tree pages={pages} currentId={currentId} onOpen={setCurrentId} onNew={newPage} onDelete={del} onMove={move} onLink={onLink} canManage={canManage} collapsedInit={prefs.treeCollapsed} onCollapse={(ids) => savePref({ treeCollapsed: ids })} />
+          {favs.some(id => pages.some(p => p.id === id)) && <div className="sb-section">
+            <div className="sb-section-head"><Star size={12} weight="fill" /> Favorites</div>
+            {favs.map(id => pages.find(p => p.id === id)).filter(Boolean).map(p => <div key={p.id} className={'tree-row fav-row' + (p.id === currentId ? ' active' : '')} onClick={() => setCurrentId(p.id)} onContextMenu={(e) => { e.preventDefault(); setTreeMenu({ id: p.id, x: e.clientX, y: e.clientY }); }}><span className="tree-label"><span className="ic"><PageIcon icon={p.icon} size={17} /></span><span className="tl-text">{p.title || 'Untitled'}</span></span></div>)}
+            <div className="sb-section-head" style={{ marginTop: 8 }}>Pages</div>
+          </div>}
+          <Tree pages={pages} currentId={currentId} onOpen={setCurrentId} onNew={newPage} onDelete={del} onMove={move} onLink={onLink} onContext={(id, x, y) => setTreeMenu({ id, x, y })} canManage={canManage} collapsedInit={prefs.treeCollapsed} onCollapse={(ids) => savePref({ treeCollapsed: ids })} />
           {canManage && <div className="newpage-wrap">
             <button className="newpage" onClick={() => setTplMenu(v => !v)}><Plus size={16} /> New page</button>
             {tplMenu && <>
@@ -1240,9 +1414,15 @@ function Workspace({ me, setMe, onLogout }) {
           <Avatar user={me} size={30} /><span className="who">{me.name || me.email}{me.is_admin ? ' ★' : ''}</span><SettingsIcon size={17} className="cog" />
         </div>
       </aside>
-      {!sidebar && <button className="reopen-btn" onClick={() => { setSidebar(true); savePref({ sidebar: true }); }} title="Open sidebar"><Menu size={18} /></button>}
+      {!sidebar && <button className="reopen-btn" onClick={() => setSidebarOpen(true)} title="Open sidebar (⌘\)"><Menu size={18} /></button>}
+      {sidebar && <div className="sb-backdrop" onClick={() => setSidebarOpen(false)} />}
       <main className={'main' + (sidebar ? '' : ' no-sidebar')}>
-        {!page && (pages.length === 0
+        {!page && noWorkspace && <div className="empty-home">
+              <Logo size={52} />
+              <div className="empty-title">You're not in a workspace yet</div>
+              <div className="empty-sub">Ask a workspace manager to invite you (Settings → People). Once they do, its pages appear here.</div>
+            </div>}
+        {!page && !noWorkspace && (pages.length === 0
           ? <div className="empty-home">
               <Logo size={52} />
               <div className="empty-title">{currentWs.name}</div>
@@ -1265,7 +1445,7 @@ function Workspace({ me, setMe, onLogout }) {
                 {!page.can_edit && !page.locked && <span className="chip-mini"><Eye size={11} /> View only</span>}
                 <FacePile members={wsMembers} onClick={() => page.can_admin && setSharing(true)} />
                 {page.can_admin && <button className="btn-share" onClick={() => setSharing(true)}><Share2 size={13} /> Share</button>}
-                <PageMenu page={page} canManage={page.can_admin} onLog={() => setLogOpen(true)} onLock={() => setLocked(!page.locked)} onDelete={async () => { if (await confirm('Delete this page? It moves to Trash.', { danger: true, confirmLabel: 'Delete page' })) { const parent = page.parent_id; await api('/pages/' + page.id, { method: 'DELETE' }); setCurrentId(parent || null); refreshTree(); bumpTree(); } }} />
+                <PageMenu page={page} canManage={page.can_admin} canEdit={!!page.can_edit} isFav={favs.includes(page.id)} wordCount={editorApi.current?.getWordCount?.() || 0} onFav={() => toggleFav(page.id)} onCopyLink={() => copyLink(page.id)} onDuplicate={() => duplicatePage(page.id)} onExport={exportMarkdown} onVersions={() => setVersionsOpen(true)} onLog={() => setLogOpen(true)} onLock={() => setLocked(!page.locked)} onDelete={async () => { if (await confirm('Delete this page? It moves to Trash.', { danger: true, confirmLabel: 'Delete page' })) { const parent = page.parent_id; await api('/pages/' + page.id, { method: 'DELETE' }); setCurrentId(parent || null); refreshTree(); bumpTree(); } }} />
               </div>
             </div>
             <input ref={coverInputRef} type="file" accept="image/*" hidden onChange={pickCover} />
@@ -1282,7 +1462,7 @@ function Workspace({ me, setMe, onLogout }) {
                   <button className="emoji-in" disabled={!page.can_edit} onClick={() => setIconPicker(v => !v)}><PageIcon icon={page.icon} size={48} /></button>
                   {iconPicker && <IconPicker onPick={(v) => { setPage({ ...page, icon: v }); save({ icon: v }); }} onClose={() => setIconPicker(false)} />}
                 </span>
-                <textarea className="title-in" value={page.title} placeholder="Untitled" disabled={!page.can_edit} rows={1} ref={el => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }} onInput={e => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }} onChange={e => { setPage({ ...page, title: e.target.value.replace(/\n/g, '') }); save({ title: e.target.value.replace(/\n/g, '') }); }} />
+                <textarea className="title-in" value={page.title} placeholder="Untitled" disabled={!page.can_edit} rows={1} ref={el => { titleRef.current = el; if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} onKeyDown={e => { if (e.key === 'Enter' || (e.key === 'ArrowDown' && e.target.selectionStart === e.target.value.length)) { e.preventDefault(); if (page.view === 'board') return; editorApi.current?.focusStart(); } }} onInput={e => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }} onChange={e => { setPage({ ...page, title: e.target.value.replace(/\n/g, '') }); save({ title: e.target.value.replace(/\n/g, '') }); }} />
               </div>
               {page.view === 'board'
                 ? <>
@@ -1293,7 +1473,7 @@ function Workspace({ me, setMe, onLogout }) {
                 </>
                 : <>
                 <Properties tags={tags} editable={!!page.can_edit} workspace={currentWsId} onTagClick={(name, color) => setTagFilter({ name, color })} onChange={(t) => { setPage({ ...page, tags: JSON.stringify(t) }); save({ tags: t }); }} />
-                <Editor page={page} editable={!!page.can_edit} pages={pages} apiRef={editorApi} me={me} onChange={(content) => save({ content })} />
+                <Editor page={page} editable={!!page.can_edit} pages={pages} apiRef={editorApi} me={me} uploadFile={uploadFile} onChange={(content) => save({ content })} />
                 {backlinks.length > 0 && <div className="backlinks">
                   <div className="bl-head clickable" onClick={() => setBlOpen(v => !v)}>{blOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />} Linked references <span className="muted">({backlinks.length})</span></div>
                   {blOpen && backlinks.map(b => <div className="bl" key={b.id} onClick={() => setCurrentId(b.id)}><PageIcon icon={b.icon} size={14} /><span>{b.title || 'Untitled'}</span></div>)}
@@ -1307,8 +1487,25 @@ function Workspace({ me, setMe, onLogout }) {
       {tagFilter && <TagView tag={tagFilter.name} color={tagFilter.color} workspace={currentWsId} onOpen={setCurrentId} onClose={() => setTagFilter(null)} />}
       {sharing && page && <Share pageId={page.id} origin={location.origin} onClose={() => { setSharing(false); refreshTree(); }} />}
       {logOpen && page && <Changelog pageId={page.id} onClose={() => setLogOpen(false)} />}
+      {versionsOpen && page && <Versions page={page} canEdit={!!page.can_edit} onRestore={restoreVersion} onClose={() => setVersionsOpen(false)} />}
+      {treeMenu && (() => { const tp = pages.find(p => p.id === treeMenu.id); if (!tp) return null; const act = (fn) => { setTreeMenu(null); fn(); }; return createPortal(<>
+        <div className="picker-overlay" onClick={() => setTreeMenu(null)} onContextMenu={(e) => { e.preventDefault(); setTreeMenu(null); }} />
+        <div className="popmenu tree-menu" style={{ position: 'fixed', left: Math.min(treeMenu.x, window.innerWidth - 230), top: Math.min(treeMenu.y, window.innerHeight - 330), width: 220 }}>
+          <div className="popmenu-item" onClick={() => act(() => window.open(pageUrl(tp.id), '_blank'))}><ArrowSquareOut size={15} /> Open in new tab</div>
+          <div className="popmenu-item" onClick={() => act(() => toggleFav(tp.id))}><Star size={15} weight={favs.includes(tp.id) ? 'fill' : 'regular'} /> {favs.includes(tp.id) ? 'Remove from favorites' : 'Add to favorites'}</div>
+          <div className="popmenu-item" onClick={() => act(() => copyLink(tp.id))}><LinkSimple size={15} /> Copy link</div>
+          {canManage && <>
+            <div className="popmenu-sep" />
+            <div className="popmenu-item" onClick={() => act(() => newPage(tp.id))}><Plus size={15} /> New subpage</div>
+            <div className="popmenu-item" onClick={() => act(() => { focusTitleNext.current = true; if (currentId === tp.id) { titleRef.current?.focus(); titleRef.current?.select?.(); focusTitleNext.current = false; } else setCurrentId(tp.id); })}><Pencil size={15} /> Rename</div>
+            {tp.view !== 'board' && tp.view !== 'column' && <div className="popmenu-item" onClick={() => act(() => duplicatePage(tp.id))}><CopySimple size={15} /> Duplicate</div>}
+            <div className="popmenu-sep" />
+            <div className="popmenu-item danger" onClick={() => act(async () => { if (await confirm('Delete this page? It moves to Trash.', { danger: true, confirmLabel: 'Delete page' })) del(tp.id); })}><Trash2 size={15} /> Delete</div>
+          </>}
+        </div>
+      </>, document.body); })()}
       {settings && <Settings me={me} setMe={setMe} currentWs={currentWs} onWsChange={loadWs} onLogout={onLogout} onImported={() => { refreshTree(); bumpTree(); }} onClose={() => setSettings(false)} />}
-      {searching && <Search workspace={currentWsId} onOpen={setCurrentId} onClose={() => setSearching(false)} />}
+      {searching && <Search workspace={currentWsId} recent={recent} pages={pages} onOpen={setCurrentId} onClose={() => setSearching(false)} />}
       {wsModal && <NewWorkspaceModal onCreate={createWs} onClose={() => setWsModal(false)} />}
     </div>
   );

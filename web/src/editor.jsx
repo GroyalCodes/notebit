@@ -126,6 +126,9 @@ export function Editor({ page, editable, pages, onChange, apiRef, me, uploadFile
         return true;
       },
       getWordCount: () => { try { return (editor.prosemirrorView?.dom?.innerText || '').trim().split(/\s+/).filter(Boolean).length; } catch { return 0; } },
+      getContent: () => { try { return JSON.stringify(editor.document); } catch { return null; } },
+      toMarkdown: () => editor.blocksToMarkdownLossy(editor.document),
+      replaceAll: (blocks) => { try { editor.replaceBlocks(editor.document, blocks); } catch (e) { if (import.meta.env.DEV) console.warn(e); } },
     };
     return () => { apiRef.current = null; };
   }, [editor, apiRef]);
@@ -541,6 +544,7 @@ export function Editor({ page, editable, pages, onChange, apiRef, me, uploadFile
   const uiReq = useBlockUI();
   const calloutReq = uiReq && uiReq.kind === 'callout' && uiReq.editor === editor ? uiReq : null;
   const light = isLightTheme();
+  useEffect(() => { if (!calloutReq) return; const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); blockUI.close(); } }; document.addEventListener('keydown', onKey, true); return () => document.removeEventListener('keydown', onKey, true); }, [calloutReq]);
 
   // slash menu: default items (minus media we don't host) + ours, merged INTO the same
   // "Basic blocks" group so it never renders twice

@@ -7,6 +7,7 @@ export default defineConfig({
     proxy: {
       '/api': 'http://127.0.0.1:8200',
       '/collab': { target: 'ws://127.0.0.1:8200', ws: true },
+      '/uploads': 'http://127.0.0.1:8200',
     },
   },
   build: { chunkSizeWarningLimit: 2000 },
