@@ -193,12 +193,14 @@ export function Editor({ page, editable, pages, onChange, apiRef, me, uploadFile
         wrapRef.current?.classList.add('handle-drag');
       } catch {}
     };
-    let raf = 0;
+    let raf = 0, last = 0, pend = null;
     const onDragOver = (e) => {
       const d = dragRef.current; if (!d) return;
       if (e.target.closest?.('.sidebar, .clog, .inbox-pop, .search-box, .card')) { showDropInd(null); return; }
-      const x = e.clientX, y = e.clientY;
-      cancelAnimationFrame(raf); raf = requestAnimationFrame(() => showDropInd(computeSeam(x, y, d.ids)));
+      pend = [e.clientX, e.clientY];
+      const now = performance.now();
+      if (now - last > 16) { last = now; cancelAnimationFrame(raf); raf = 0; showDropInd(computeSeam(pend[0], pend[1], d.ids)); }
+      else if (!raf) raf = requestAnimationFrame(() => { raf = 0; last = performance.now(); if (dragRef.current && pend) showDropInd(computeSeam(pend[0], pend[1], dragRef.current.ids)); });
     };
     const finish = () => { dragRef.current = null; showDropInd(null); wrapRef.current?.classList.remove('handle-drag'); };
     const onDrop = (e) => {

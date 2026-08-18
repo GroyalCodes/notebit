@@ -3,7 +3,7 @@
 ![NoteBit](docs/banner.png)
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-a78bdb.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-a78bdb.svg)](https://github.com/GroyalCodes/notebit/releases)
+[![Version](https://img.shields.io/badge/version-1.3.0-a78bdb.svg)](https://github.com/GroyalCodes/notebit/releases)
 [![Self-hostable](https://img.shields.io/badge/self--hostable-yes-5fc18a.svg)](#self-host)
 [![Stars](https://img.shields.io/github/stars/GroyalCodes/notebit?color=a78bdb)](https://github.com/GroyalCodes/notebit/stargazers)
 
@@ -21,14 +21,16 @@ Real-time collaboration, Kanban boards, a knowledge graph, per-page permissions,
 
 Notes apps got bloated and pricey. NoteBit is neither.
 
-- **Truly self-hostable**: one container, one SQLite file. No external services required.
+- **Truly self-hostable**: one container, one SQLite file (plus an `uploads` folder for images). No external services required.
 - **No seat tax**: invite your whole team; the self-hosted version is never seat-capped.
-- **Everything is a connected page**: docs, board columns, and cards are all pages, visualised in an interactive **knowledge graph**.
-- **Real-time collaboration**: Google-Docs-style multiplayer cursors out of the box.
+- **A proper editor**: slash commands, callouts, toggles, to-dos, tables, code, images, drag-and-drop with a real drop indicator, one block menu (handle click or right-click), Markdown paste, browser spellcheck.
+- **Everything is a connected page**: docs, board columns, and cards are all pages, visualised in an interactive **knowledge graph**; every page has a link (`/page/<id>`), backlinks, favorites and a version history.
+- **Real-time collaboration**: Google-Docs-style multiplayer cursors out of the box, comments with @mentions, an inbox.
 - **Kanban that fits**: columns and cards are first-class pages with per-column permissions and an approval workflow.
+- **Search that finds things**: ⌘K searches titles and text with snippets and recents.
 - **Multiple workspaces**: one per team or project, each with its own members and settings.
 - **Publish to the web**: share any page or board publicly, read-only.
-- **Own your data**: it all lives in one SQLite database you control.
+- **Own your data**: it all lives in one SQLite database you control. Five dark themes and a light one.
 
 ## Self-host
 
@@ -44,7 +46,7 @@ On Windows (PowerShell):
 irm https://notebit.org/install.ps1 | iex
 ```
 
-The installer uses your Node if you have version 20 or newer, or fetches a private runtime that lives inside the notebit folder and touches nothing else. It downloads the prebuilt app, starts it in the background, and opens http://localhost:8200. Your notes live in `notebit/data` as a single SQLite database; back up that folder and you have backed up everything. Re-run the installer any time to update.
+The installer uses your Node if you have version 20 or newer, or fetches a private runtime that lives inside the notebit folder and touches nothing else. It downloads the prebuilt app, starts it in the background, and opens http://localhost:8200. Your notes live in `notebit/data` (a single SQLite database plus uploaded images); back up that folder and you have backed up everything. Re-run the installer any time to update.
 
 `start.sh` / `stop.sh` (or `Start NoteBit.bat` / `Stop NoteBit.bat` on Windows) control it afterwards.
 
@@ -131,7 +133,11 @@ cd web && npm install && npm run dev        # http://localhost:5173
 
 ## Stack
 
-Node 22 · Fastify 5 · better-sqlite3 · React 18 · Vite 6 · BlockNote · Yjs (real-time). No external database, queue, or cache.
+Node 22 · Fastify 5 · better-sqlite3 · React 18 · Vite 6 · BlockNote 0.25 · Yjs (real-time). No external database, queue, or cache.
+
+`web/package.json` pins `prosemirror-model` to 1.25.0 (via `overrides`): 1.25.1 changed how the parser places nodes that do not fit their context, which BlockNote 0.25's paste rules were not written for (pasted blocks came out nested under empty copies). Remove the pin when moving to a newer BlockNote.
+
+Frontend layout: `web/src/ui.jsx` (shared primitives), `blocks.jsx` (editor schema and custom blocks), `editor.jsx` (the page editor), `App.jsx` (everything else). See `CHANGELOG.md` for what changed in each release.
 
 ## License
 

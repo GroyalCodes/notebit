@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.WIKI_DB || path.join(__dirname, 'data', 'wiki.db');
 const PORT = Number(process.env.PORT || 8200);
-const VERSION = '1.2.2';
+const VERSION = '1.3.0';
 const ALLOW_SIGNUP = process.env.ALLOW_SIGNUP !== 'false';
 const WEB_DIR = process.env.WEB_DIR || path.join(__dirname, '..', 'web', 'dist');
 
@@ -220,16 +220,16 @@ if (!db.prepare('SELECT 1 FROM workspaces LIMIT 1').get()) {
   const welcome = [
     { type: 'callout', props: { emoji: '👋', bg: 'accent' }, content: [t('Welcome to NoteBit. This page is yours: edit it, break it, or delete it.')] },
     { type: 'heading', props: { level: 2 }, content: [t('The basics')] },
-    { type: 'checkListItem', props: { checked: false }, content: [t('Type '), t('/', { code: true }), t(' anywhere for blocks')] },
-    { type: 'checkListItem', props: { checked: false }, content: [t('Drag the handle on the left to move things; box-select from the margins to grab several')] },
-    { type: 'checkListItem', props: { checked: false }, content: [t('Right-click a block for everything else')] },
-    { type: 'checkListItem', props: { checked: false }, content: [t('Tab nests, Shift+Tab un-nests')] },
+    { type: 'checkListItem', props: { checked: false }, content: [t('Type '), t('/', { code: true }), t(' anywhere for blocks: headings, lists, to-dos, callouts, toggles, images, tables')] },
+    { type: 'checkListItem', props: { checked: false }, content: [t('Drag the '), t('⋮⋮', { code: true }), t(' handle to move a block; box-select from the margins to grab several')] },
+    { type: 'checkListItem', props: { checked: false }, content: [t('Click the '), t('⋮⋮', { code: true }), t(' handle (or right-click selected text) for the block menu. Right-click a word for spelling suggestions')] },
+    { type: 'checkListItem', props: { checked: false }, content: [t('Tab nests, Shift+Tab un-nests. '), t('⌘K', { code: true }), t(' searches, '), t('⌘\\', { code: true }), t(' hides the sidebar')] },
     { type: 'toggle', props: {}, content: [t('Click the arrow on this toggle')], children: [
       { type: 'paragraph', content: [t('Anything can live inside: text, lists, even more toggles.')] },
     ] },
     { type: 'heading', props: { level: 2 }, content: [t('Make it a team')] },
     { type: 'paragraph', content: [t('Invite people in Settings then People. You will see their cursors live on the page, and comments with @mentions land in the inbox by the search bar.')] },
-    { type: 'paragraph', content: [t('The Overview in the sidebar draws a living map of how your pages connect. The New board button makes a kanban where every card is a page.')] },
+    { type: 'paragraph', content: [t('The Overview in the sidebar draws a living map of how your pages connect. The New board button makes a kanban where every card is a page. Every page has a link you can share, a version history, and a Favorites star.')] },
     { type: 'divider', props: {} },
     { type: 'quote', props: {}, content: [t('Notes without the bloat. Or the bill.')] },
   ];

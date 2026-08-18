@@ -4,7 +4,7 @@ import { useCreateBlockNote, createReactInlineContentSpec } from '@blocknote/rea
 import { BlockNoteView } from '@blocknote/mantine';
 import { BlockNoteSchema, defaultInlineContentSpecs, defaultBlockSpecs, createBlockSpec } from '@blocknote/core';
 import { TextT, TextHOne, TextHTwo, TextHThree, ListBullets, ListNumbers, CheckSquare, Code as CodeIcon, Lightbulb, Quotes, CaretRight as ChevronRight } from '@phosphor-icons/react';
-import { PageIcon, parseContent } from './ui.jsx';
+import { PageIcon, parseContent, isLightTheme } from './ui.jsx';
 export const pageMetaStore = { map: new Map(), v: 0, subs: new Set() };
 export function feedPageMeta(pages) {
   pageMetaStore.map = new Map(pages.map(p => [p.id, (p.title || '') + '\u0000' + (p.icon || '')]));
@@ -169,7 +169,7 @@ export const schema = BlockNoteSchema.create({
 
 export function ReadOnly({ content }) {
   const editor = useCreateBlockNote({ schema, initialContent: useMemo(() => parseContent(content), []) });
-  return <BlockNoteView editor={editor} editable={false} theme="dark" />;
+  return <BlockNoteView editor={editor} editable={false} theme={isLightTheme() ? 'light' : 'dark'} />;
 }
 
 export const TURN_INTO = [
