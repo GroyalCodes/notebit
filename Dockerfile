@@ -19,7 +19,9 @@ RUN npm ci --omit=dev
 FROM node:22-slim
 LABEL org.opencontainers.image.title="NoteBit" \
       org.opencontainers.image.description="A clean, self-hostable workspace for pages, boards, and team knowledge." \
-      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      org.opencontainers.image.source="https://github.com/GroyalCodes/notebit" \
+      org.opencontainers.image.url="https://notebit.org"
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8200 \
