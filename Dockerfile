@@ -18,7 +18,7 @@ RUN npm ci --omit=dev
 # ---- final runtime image (no build tools) ----
 FROM node:22-slim
 LABEL org.opencontainers.image.title="NoteBit" \
-      org.opencontainers.image.description="A clean, self-hostable workspace for docs, boards, and team knowledge." \
+      org.opencontainers.image.description="A clean, self-hostable workspace for pages, boards, and team knowledge." \
       org.opencontainers.image.licenses="AGPL-3.0-or-later"
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

@@ -5,10 +5,12 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import JSZip from 'jszip';
 import api from './api.js';
-import { BookOpen, MagnifyingGlass as SearchIcon, Plus, Trash as Trash2, Gear as SettingsIcon, User, Users, Globe, Tag as TagIcon, X, CaretDown as ChevronDown, CaretRight as ChevronRight, PencilSimple as Pencil, Eye, ShareNetwork as Share2, DotsSixVertical as GripVertical, List as Menu, Crown, Lock, LockOpen, DotsThree, LinkSimple, Bell, ChatCircle, ClockCounterClockwise, Heart, Star, CopySimple, DownloadSimple, ListBullets, ArrowSquareOut } from '@phosphor-icons/react';
+import { BookOpen, MagnifyingGlass as SearchIcon, Plus, Trash as Trash2, Gear as SettingsIcon, User, Users, Globe, Tag as TagIcon, X, CaretDown as ChevronDown, CaretRight as ChevronRight, PencilSimple as Pencil, Eye, ShareNetwork as Share2, DotsSixVertical as GripVertical, List as Menu, Crown, Lock, LockOpen, DotsThree, LinkSimple, Bell, ChatCircle, ClockCounterClockwise, Heart, Star, CopySimple, DownloadSimple, ListBullets, ArrowSquareOut, Graph as GraphIcon, SquaresFour, ShieldCheck, Sparkle } from '@phosphor-icons/react';
 import { ROLE_INFO, THEMES, applyTheme, Logo, treeSig, APP_VERSION, PageIcon, BoardGlyph, BOARD_COLORS, IconPicker, parseJSON, TAG_COLORS, tagColor, normTags, Avatar, fileToAvatar, fileToCover, useConfirm, ConfirmProvider, Popover, fmtDate, fmtWhen, renderMentions } from './ui.jsx';
 import { feedPageMeta, schema, ReadOnly } from './blocks.jsx';
 import { Editor } from './editor.jsx';
+import { Overview, MapView } from './home.jsx';
+import { PermissionsPane, ClaudePane, EditorPrefs, PREF_DEFAULTS } from './settings-extra.jsx';
 // live registry so mention chips always show the page's CURRENT title/icon
 // ---------- public read-only ----------
 // ---------- confirm modal (replaces window.confirm) ----------
@@ -112,7 +114,7 @@ function Login({ onAuth, ws }) {
 }
 
 // ---------- sidebar tree — pointer-based drag & drop ----------
-function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, onContext, canManage, collapsedInit, onCollapse }) {
+function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, onContext, canManage, caps = {}, collapsedInit, onCollapse }) {
   const [over, setOver] = useState(null);          // { id, zone } drop indicator
   const [drag, setDrag] = useState(null);          // page being dragged (floating preview)
   const [pos, setPos] = useState({ x: 0, y: 0 });
@@ -124,6 +126,8 @@ function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, onCon
   const onMoveRef = useRef(onMove); onMoveRef.current = onMove;
   const onLinkRef = useRef(onLink); onLinkRef.current = onLink;
   const canManageRef = useRef(canManage); canManageRef.current = canManage;
+  const capsRef = useRef(caps); capsRef.current = caps;
+  const expandTimer = useRef(null);
 
   const byParent = useMemo(() => {
     const ids = new Set(pages.map(p => p.id));
@@ -137,6 +141,7 @@ function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, onCon
   const isDescendant = (anc, node) => { const bid = Object.fromEntries(pagesRef.current.map(p => [p.id, p])); let cur = node; while (cur) { if (cur === anc) return true; cur = bid[cur]?.parent_id; } return false; };
   const setOv = v => { overRef.current = v; setOver(v); };
   const toggle = id => setCollapsed(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); onCollapse?.([...n]); return n; });
+  const expand = id => setCollapsed(s => { if (!s.has(id)) return s; const n = new Set(s); n.delete(id); onCollapse?.([...n]); return n; });
 
   useEffect(() => {
     const mm = e => {
@@ -146,21 +151,32 @@ function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, onCon
         d.active = true; setDrag(pagesRef.current.find(p => p.id === d.id)); document.body.style.userSelect = 'none'; document.body.style.cursor = 'grabbing';
       }
       setPos({ x: e.clientX, y: e.clientY });
-      const row = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.tree-row');
+      // keep the list scrolling while dragging near its top or bottom edge
+      const sc = document.querySelector('.tree-scroll');
+      if (sc) { const r = sc.getBoundingClientRect(); if (e.clientY < r.top + 48) sc.scrollTop -= 8; else if (e.clientY > r.bottom - 48) sc.scrollTop += 8; }
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      if (under?.closest?.('.tree-root-zone')) { setOv({ id: '__root', zone: 'root' }); clearTimeout(expandTimer.current); expandTimer.current = null; return; }
+      const row = under?.closest?.('.tree-row');
       const id = row?.getAttribute?.('data-id');
       if (id && id !== d.id && !isDescendant(d.id, id)) {
         const r = row.getBoundingClientRect(); const y = (e.clientY - r.top) / r.height;
-        let zone = y < 0.25 ? 'before' : y > 0.75 ? 'after' : 'inside';
+        let zone = y < 0.3 ? 'before' : y > 0.7 ? 'after' : 'inside';
         const tgt = pagesRef.current.find(pp => pp.id === id);
-        if (zone === 'inside' && tgt?.locked && !canManageRef.current) zone = y < 0.5 ? 'before' : 'after'; // can't nest into a locked section
+        if (zone === 'inside' && ((tgt?.locked && !canManageRef.current) || tgt?.view === 'column')) zone = y < 0.5 ? 'before' : 'after'; // no nesting into locked sections or columns
+        const prev = overRef.current;
+        if (!prev || prev.id !== id || prev.zone !== zone) {
+          clearTimeout(expandTimer.current); expandTimer.current = null;
+          if (zone === 'inside') expandTimer.current = setTimeout(() => expand(id), 550); // hover to open a collapsed section
+        }
         setOv({ id, zone });
-      } else setOv(null);
+      } else { setOv(null); clearTimeout(expandTimer.current); expandTimer.current = null; }
     };
     const mu = (e) => {
       const d = di.current, o = overRef.current;
+      clearTimeout(expandTimer.current); expandTimer.current = null;
       if (d?.active) {
         draggedRef.current = true; setTimeout(() => { draggedRef.current = false; }, 60);
-        if (o) onMoveRef.current(d.id, o.id, o.zone);
+        if (o) { onMoveRef.current(d.id, o.zone === 'root' ? null : o.id, o.zone); if (o.zone === 'inside') expand(o.id); }
         else { const ed = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.bn-editor, .ProseMirror'); if (ed && onLinkRef.current) onLinkRef.current(d.id, e.clientX, e.clientY); }
       }
       di.current = null; overRef.current = null; setDrag(null); setOver(null);
@@ -180,18 +196,18 @@ function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, onCon
         <div
           className={'tree-row' + (p.id === currentId ? ' active' : '') + (dz === 'inside' ? ' drop-in' : '')}
           data-id={p.id}
-          style={{ paddingLeft: 6 + depth * 13 }}
-          onMouseDown={e => { if (e.button !== 0 || e.target.closest('button, .twist')) return; di.current = { id: p.id, startX: e.clientX, startY: e.clientY, active: false }; }}
+          style={{ paddingLeft: 6 + depth * 20 }}
+          onMouseDown={e => { if (e.button !== 0 || e.target.closest('button, .twist')) return; if (!(canManage || caps.move)) return; di.current = { id: p.id, startX: e.clientX, startY: e.clientY, active: false }; }}
           onContextMenu={e => { if (!onContext) return; e.preventDefault(); onContext(p.id, e.clientX, e.clientY); }}
         >
-          {dz === 'before' && <span className="drop-line top" />}
-          {dz === 'after' && <span className="drop-line bot" />}
+          {dz === 'before' && <span className="drop-line top" style={{ left: 10 + depth * 20 }} />}
+          {dz === 'after' && <span className="drop-line bot" style={{ left: 10 + depth * 20 }} />}
           <span className="grip"><GripVertical size={12} /></span>
           <span className="twist" onClick={() => toggle(p.id)}>{kids.length ? (open ? <ChevronDown size={12} /> : <ChevronRight size={12} />) : ''}</span>
           <span className="tree-label" onClick={() => { if (draggedRef.current) return; onOpen(p.id); }}><span className="ic"><PageIcon icon={p.icon} size={17} /></span>{p.view === 'board' && <span className="tree-bglyph" title="Board" style={{ color: (p.icon || '').split(':')[2] || undefined }}><BoardGlyph size={11} /></span>}<span className="tl-text">{p.title || 'Untitled'}</span></span>
-          {canManage && <span className="row-actions" onMouseDown={e => e.stopPropagation()}>
-            <button title="New subpage" onClick={e => { e.stopPropagation(); onNew(p.id); }}><Plus size={13} /></button>
-            <button title="Delete" onClick={e => { e.stopPropagation(); onDelete(p.id); }}><Trash2 size={12} /></button>
+          {(canManage || ((caps.subpage || caps.delete) && p.can_edit)) && <span className="row-actions" onMouseDown={e => e.stopPropagation()}>
+            {(canManage || (caps.subpage && p.can_edit)) && p.view !== 'column' && <button title="New sub-page" onClick={e => { e.stopPropagation(); onNew(p.id); }}><Plus size={14} /></button>}
+            {(canManage || (caps.delete && p.can_edit)) && <button title="Delete" onClick={e => { e.stopPropagation(); onDelete(p.id); }}><Trash2 size={13} /></button>}
           </span>}
         </div>
         {open && kids.map(k => renderNode(k, depth + 1))}
@@ -201,7 +217,8 @@ function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, onCon
   return (
     <>
       <div className="tree">{(byParent['__root'] || []).map(p => renderNode(p, 0))}</div>
-      {drag && <div className="drag-ghost" style={{ left: pos.x + 14, top: pos.y + 6 }}><PageIcon icon={drag.icon} size={14} /><span>{drag.title || 'Untitled'}</span></div>}
+      {drag && (canManage || caps.create) && <div className={'tree-root-zone' + (over?.zone === 'root' ? ' on' : '')}>Move to top level</div>}
+      {drag && <div className="drag-ghost" style={{ left: pos.x + 14, top: pos.y + 6 }}><PageIcon icon={drag.icon} size={14} /><span>{drag.title || 'Untitled'}</span><span className="dg-hint">{over?.zone === 'inside' ? 'into' : over?.zone === 'root' ? 'top level' : over ? 'next to' : ''}</span></div>}
     </>
   );
 }
@@ -320,7 +337,7 @@ function AdminUsers({ me }) {
   return (
     <div className="set-pane">
       <h3>All users <span className="muted">· {users.length}</span></h3>
-      <div className="muted small">Everyone with a NoteBit account. Super-admins manage every workspace and these accounts. Invite people into a workspace from the <b>People</b> tab.</div>
+      <div className="muted small">Everyone with a NoteBit account. Super-admins manage every workspace and these accounts. Invite people into a workspace above.</div>
       {users.map(u => (
         <div className="member" key={u.id}>
           <Avatar user={u} size={34} />
@@ -333,8 +350,8 @@ function AdminUsers({ me }) {
     </div>
   );
 }
-function Settings({ me, setMe, currentWs, onWsChange, onLogout, onImported, onClose }) {
-  const [tab, setTab] = useState('account');
+function Settings({ me, setMe, currentWs, canManage, pages, caps, onWsChange, onLogout, onImported, onClose, initialTab }) {
+  const [tab, setTab] = useState(initialTab || 'account');
   return (
     <div className="modal-bg" onClick={onClose}>
       <div className="card settings" onClick={e => e.stopPropagation()}>
@@ -342,6 +359,8 @@ function Settings({ me, setMe, currentWs, onWsChange, onLogout, onImported, onCl
           <div className="set-title">Settings</div>
           <div className={'set-tab' + (tab === 'account' ? ' on' : '')} onClick={() => setTab('account')}><User size={14} /> My account</div>
           <div className={'set-tab' + (tab === 'members' ? ' on' : '')} onClick={() => setTab('members')}><Users size={14} /> People</div>
+          {canManage && <div className={'set-tab' + (tab === 'permissions' ? ' on' : '')} onClick={() => setTab('permissions')}><ShieldCheck size={14} /> Permissions</div>}
+          <div className={'set-tab' + (tab === 'claude' ? ' on' : '')} onClick={() => setTab('claude')}><Sparkle size={14} /> Claude Code</div>
           <div className={'set-tab' + (tab === 'trash' ? ' on' : '')} onClick={() => setTab('trash')}><Trash2 size={14} /> Trash</div>
           {me.is_admin === 1 && <div className={'set-tab' + (tab === 'workspace' ? ' on' : '')} onClick={() => setTab('workspace')}><SettingsIcon size={14} /> Workspace</div>}
           {me.is_admin === 1 && <div className={'set-tab' + (tab === 'data' ? ' on' : '')} onClick={() => setTab('data')}><BookOpen size={14} /> Import / Export</div>}
@@ -359,6 +378,8 @@ function Settings({ me, setMe, currentWs, onWsChange, onLogout, onImported, onCl
           {tab === 'account' && <Account me={me} setMe={setMe} onLogout={onLogout} />}
           {tab === 'trash' && <TrashView currentWs={currentWs} />}
           {tab === 'members' && <><Members me={me} currentWs={currentWs} />{me.is_admin === 1 && <AdminUsers me={me} />}</>}
+          {tab === 'permissions' && <PermissionsPane currentWs={currentWs} pages={pages || []} me={me} />}
+          {tab === 'claude' && <ClaudePane me={me} canUse={caps ? caps.api !== false : true} />}
           {tab === 'workspace' && <Workspaces currentWs={currentWs} onWsChange={onWsChange} />}
           {tab === 'data' && <><ImportPane currentWs={currentWs} onImported={onImported} /><ExportPane currentWs={currentWs} /></>}
 
@@ -416,6 +437,7 @@ function Account({ me, setMe, onLogout }) {
       <div className="theme-row">
         {THEMES.map(t => <div key={t.id} className={'theme-swatch' + ((me.theme || 'amethyst') === t.id ? ' on' : '')} onClick={() => setTheme(t.id)}><span className="ts-dot" style={{ background: t.color }} /><span>{t.name}</span></div>)}
       </div>
+      <EditorPrefs me={me} setMe={setMe} />
       <h3>Change password</h3>
       <input type="password" placeholder="Current password" value={pw.current_password} onChange={e => setPw({ ...pw, current_password: e.target.value })} />
       <input type="password" placeholder="New password (min 6)" value={pw.new_password} onChange={e => setPw({ ...pw, new_password: e.target.value })} />
@@ -796,133 +818,6 @@ function Board({ page, pages, canManage, canContribute, onOpen, onAddCard, onMov
     </div>
   );
 }
-// ---------- knowledge graph ----------
-function nmPhysics(st, t) {
-  // positions are NORMALIZED (0..1 of container) so any size at any moment renders
-  // correctly; forces integrate in pixel space derived fresh each frame
-  const { pos, nodes, edges, w, h } = st; const n = nodes.length;
-  if (!n || w < 120 || h < 120) return;
-  const X = {}, Y = {};
-  for (const nd of nodes) { const p = pos[nd.id]; if (p) { X[nd.id] = p.x * w; Y[nd.id] = p.y * h; } }
-  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
-    const ai = nodes[i].id, bi = nodes[j].id, a = pos[ai], b = pos[bi]; if (!a || !b) continue;
-    let dx = X[ai] - X[bi], dy = Y[ai] - Y[bi], d = Math.sqrt(dx * dx + dy * dy) || 0.1;
-    const f = Math.min(8, 2400 / (d * d)); dx /= d; dy /= d;
-    a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
-  }
-  for (const e of edges) {
-    const a = pos[e.from], b = pos[e.to]; if (!a || !b) continue;
-    let dx = X[e.to] - X[e.from], dy = Y[e.to] - Y[e.from], d = Math.sqrt(dx * dx + dy * dy) || 0.1;
-    const f = (d - 112) * 0.011; dx /= d; dy /= d;
-    a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
-  }
-  for (const nd of nodes) {
-    const p = pos[nd.id]; if (!p || st.drag === nd.id) continue;
-    let px = X[nd.id], py = Y[nd.id];
-    p.vx += (w / 2 - px) * 0.0006; p.vy += (h / 2 - py) * 0.0006;
-    if (t) { p.vx += Math.cos(t * 0.0002 + p.ph) * 0.02; p.vy += Math.sin(t * 0.0002 + p.ph * 1.3) * 0.02; }
-    px += Math.max(-3.2, Math.min(3.2, p.vx)); py += Math.max(-3.2, Math.min(3.2, p.vy));
-    p.vx *= 0.94; p.vy *= 0.94;
-    px = Math.max(46, Math.min(w - 120, px)); py = Math.max(56, Math.min(h - 62, py));
-    p.x = px / w; p.y = py / h;
-  }
-  // keep the whole cloud in frame: ease it toward fit if it outgrows the box
-  let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
-  for (const nd of nodes) { const p = pos[nd.id]; if (!p) continue; const px = p.x * w, py = p.y * h; if (px < minX) minX = px; if (px > maxX) maxX = px; if (py < minY) minY = py; if (py > maxY) maxY = py; }
-  const aw = w - 170, ah = h - 124, bw = maxX - minX, bh = maxY - minY;
-  if (n > 1 && (bw > aw || bh > ah)) {
-    const target = Math.min(aw / Math.max(bw, 1), ah / Math.max(bh, 1));
-    const s = 1 - (1 - target) * 0.18;
-    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-    for (const nd of nodes) { const p = pos[nd.id]; if (!p || st.drag === nd.id) continue; p.x = (w / 2 + (p.x * w - cx) * s) / w; p.y = (h / 2 + (p.y * h - cy) * s) / h; }
-  }
-}
-function nmPaint(st, nodeEls, edgeEls) {
-  const { w, h } = st;
-  for (const nd of st.nodes) { const p = st.pos[nd.id], el = nodeEls[nd.id]; if (el && p) el.style.transform = `translate(${p.x * w}px,${p.y * h}px) translate(-50%,-50%)`; }
-  st.edges.forEach((e, i) => { const l = edgeEls[i], a = st.pos[e.from], b = st.pos[e.to]; if (l && a && b) { l.setAttribute('x1', a.x * w); l.setAttribute('y1', a.y * h); l.setAttribute('x2', b.x * w); l.setAttribute('y2', b.y * h); } });
-}
-function NodeMap({ workspace, onOpen, hiddenTags }) {
-  const hidden = hiddenTags || new Set();
-  const hiddenKey = [...hidden].sort().join(',');
-  const [graph, setGraph] = useState(null);
-  const [hover, setHover] = useState(null);
-  const wrapRef = useRef();
-  const nodeEls = useRef({});
-  const edgeEls = useRef([]);
-  const S = useRef({ pos: {}, nodes: [], edges: [], w: 820, h: 460, drag: null, moved: false, raf: 0 });
-  useEffect(() => { api('/workspaces/' + workspace.id + '/graph').then(setGraph).catch(() => setGraph({ nodes: [], edges: [] })); }, [workspace.id]);
-  const visNodes = useMemo(() => !graph ? [] : graph.nodes.filter(nd => !(nd.tags || []).some(t => hidden.has(t))), [graph, hiddenKey]);
-  const visEdges = useMemo(() => { if (!graph) return []; const ids = new Set(visNodes.map(n => n.id)); return graph.edges.filter(e => ids.has(e.from) && ids.has(e.to)); }, [graph, visNodes]);
-  useEffect(() => {
-    if (!graph || !visNodes.length) return;
-    const st = S.current; st.w = wrapRef.current?.clientWidth || 820; st.h = wrapRef.current?.clientHeight || 460;
-    const nodes = visNodes, n = nodes.length;
-    nodes.forEach((nd, i) => { if (!st.pos[nd.id]) { const a = (i / n) * Math.PI * 2, R = Math.min(st.w, st.h) / 2.5; st.pos[nd.id] = { x: (st.w / 2 + Math.cos(a) * R) / st.w, y: (st.h / 2 + Math.sin(a) * R) / st.h, vx: 0, vy: 0, ph: Math.random() * 6.28 }; } });
-    st.nodes = nodes; st.edges = visEdges.filter(e => st.pos[e.from] && st.pos[e.to]); st.drag = null;
-    for (let it = 0; it < 160; it++) nmPhysics(st, 0);
-    const frame = (t) => { const el = wrapRef.current; if (el) { st.w = el.clientWidth || st.w; st.h = el.clientHeight || st.h; } nmPhysics(st, t); nmPaint(st, nodeEls.current, edgeEls.current); st.raf = requestAnimationFrame(frame); };
-    cancelAnimationFrame(st.raf); st.raf = requestAnimationFrame(frame);
-    const onResize = () => { if (wrapRef.current) { st.w = wrapRef.current.clientWidth || st.w; st.h = wrapRef.current.clientHeight || st.h; } };
-    window.addEventListener('resize', onResize);
-    const ro = typeof ResizeObserver !== 'undefined' && wrapRef.current ? new ResizeObserver(onResize) : null;
-    if (ro) ro.observe(wrapRef.current);
-    return () => { cancelAnimationFrame(st.raf); window.removeEventListener('resize', onResize); ro?.disconnect(); };
-  }, [graph, hiddenKey]);
-  const onDown = (id, e) => {
-    if (e.button != null && e.button !== 0) return;
-    e.preventDefault();
-    const st = S.current; st.drag = id; st.moved = false;
-    const rect = wrapRef.current.getBoundingClientRect();
-    const move = (ev) => { st.moved = true; const p = st.pos[id]; if (!p) return; p.x = Math.max(46, Math.min(st.w - 120, ev.clientX - rect.left)) / st.w; p.y = Math.max(56, Math.min(st.h - 62, ev.clientY - rect.top)) / st.h; p.vx = 0; p.vy = 0; };
-    const up = () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); const moved = st.moved; st.drag = null; if (!moved) onOpen(id); };
-    document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
-  };
-  if (!graph) return <div className="nodemap loading muted small">Building map…</div>;
-  if (!graph.nodes.length) return null;
-  const linked = (id) => hover && (hover === id || visEdges.some(e => (e.from === hover && e.to === id) || (e.to === hover && e.from === id)));
-  // Obsidian-style sizing: nodes grow with their connection count, so hub pages read as hubs
-  const degree = {}, rootOf = {};
-  visNodes.forEach(n => { rootOf[n.id] = !!n.root; });
-  visEdges.forEach(e => { degree[e.from] = (degree[e.from] || 0) + 1; degree[e.to] = (degree[e.to] || 0) + 1; });
-  // roots anchor the map: big by right, links add growth; children never outgrow roots
-  const sizeOf = (id) => rootOf[id]
-    ? Math.min(1.95, 1.5 + Math.sqrt(degree[id] || 0) * 0.08)
-    : Math.min(1.4, 1 + Math.sqrt(degree[id] || 0) * 0.13);
-  return (
-    <div className="nodemap" ref={wrapRef}>
-      <svg className="nm-edges" width="100%" height="100%">
-        {visEdges.map((e, i) => { const on = hover && (e.from === hover || e.to === hover); return <line key={e.from + e.to} ref={el => (edgeEls.current[i] = el)} className={'nm-edge ' + e.kind + (on ? ' on' : hover ? ' dim' : '')} />; })}
-      </svg>
-      {visNodes.map(nd => { const active = !hover || linked(nd.id); const s = sizeOf(nd.id); return (
-        <div key={nd.id} ref={el => (nodeEls.current[nd.id] = el)} className={'nm-node' + (active ? '' : ' dim') + (hover === nd.id ? ' hl' : '') + (nd.root ? ' hub' : '')} style={{ '--ns': s }}
-          onMouseEnter={() => setHover(nd.id)} onMouseLeave={() => setHover(null)} onPointerDown={e => onDown(nd.id, e)} title={nd.title || 'Untitled'}>
-          <span className="nm-dot"><PageIcon icon={nd.icon} size={18} /></span>
-          <span className="nm-label">{nd.title || 'Untitled'}</span>
-        </div>
-      ); })}
-    </div>
-  );
-}
-function WorkspaceHome({ workspace, pages, canManage, onOpen, onNewDoc, onNewBoard, onTagClick }) {
-  const boards = new Set(pages.filter(p => p.view === 'board').map(p => p.id));
-  const list = pages.filter(p => !(p.parent_id && boards.has(p.parent_id)));
-  const [tags, setTags] = useState([]);
-  const [hiddenTags, setHiddenTags] = useState(() => new Set());
-  const toggleTag = (name) => setHiddenTags(s => { const n = new Set(s); const k = name.toLowerCase(); n.has(k) ? n.delete(k) : n.add(k); return n; });
-  useEffect(() => { api('/tags?workspace=' + workspace.id).then(setTags).catch(() => {}); setHiddenTags(new Set()); }, [workspace.id]);
-  return (
-    <div className="ws-home">
-      <div className="ws-home-head">
-        <PageIcon icon={workspace.icon} size={36} />
-        <div className="col grow"><div className="ws-home-title">{workspace.name}</div><div className="muted small">{list.length} page{list.length === 1 ? '' : 's'}</div></div>
-        {canManage && <div className="row gap"><button className="btn-soft" onClick={onNewDoc}><Pencil size={14} /> New doc</button><button className="btn-soft" onClick={onNewBoard}><BoardGlyph size={14} /> New board</button></div>}
-      </div>
-      {tags.length > 0 && <div className="ws-tags">{tags.slice(0, 28).map(t => { const off = hiddenTags.has(t.name.toLowerCase()); return <span className={'tag clickable' + (off ? ' off' : '')} key={t.name} style={{ '--tc': t.color || tagColor(t.name) }} title={off ? 'Show these pages in the graph' : 'Hide these pages from the graph'} onClick={() => toggleTag(t.name)}>{t.name}<span className="ws-tag-n">{t.count}</span></span>; })}</div>}
-      <NodeMap workspace={workspace} onOpen={onOpen} hiddenTags={hiddenTags} />
-    </div>
-  );
-}
 function TagView({ tag, color, workspace, onOpen, onClose }) {
   const [pages, setPages] = useState(null);
   useEffect(() => { api('/tagpages?tag=' + encodeURIComponent(tag) + (workspace ? '&workspace=' + workspace : '')).then(setPages).catch(() => setPages([])); }, [tag]);
@@ -938,7 +833,7 @@ function TagView({ tag, color, workspace, onOpen, onClose }) {
     </div>
   );
 }
-function PageMenu({ page, canManage, canEdit, isFav, wordCount, onFav, onLock, onDelete, onLog, onVersions, onDuplicate, onExport, onCopyLink }) {
+function PageMenu({ page, canManage, canDelete, canDuplicate, canEdit, isFav, wordCount, onFav, onLock, onDelete, onLog, onVersions, onDuplicate, onExport, onCopyLink }) {
   return (
     <Popover width={236} align="right" trigger={<button className="icon-btn" title="Page options"><DotsThree size={20} weight="bold" /></button>}>
       {(close) => <>
@@ -950,12 +845,12 @@ function PageMenu({ page, canManage, canEdit, isFav, wordCount, onFav, onLock, o
         <div className="popmenu-item" onClick={() => { close(); onCopyLink(); }}><LinkSimple size={15} /> Copy link</div>
         {page.is_public && <div className="popmenu-item" onClick={() => { navigator.clipboard?.writeText(location.origin + '/p/' + page.id).catch(() => {}); close(); }}><Globe size={15} /> Copy public link</div>}
         <div className="popmenu-sep" />
-        {canManage && <div className="popmenu-item" onClick={() => { close(); onDuplicate(); }}><CopySimple size={15} /> Duplicate</div>}
+        {canDuplicate && <div className="popmenu-item" onClick={() => { close(); onDuplicate(); }}><CopySimple size={15} /> Duplicate</div>}
         {page.view !== 'board' && <div className="popmenu-item" onClick={() => { close(); onExport(); }}><DownloadSimple size={15} /> Export as Markdown</div>}
         {page.view !== 'board' && <div className="popmenu-item" onClick={() => { close(); onVersions(); }}><ClockCounterClockwise size={15} /> Version history</div>}
         <div className="popmenu-item" onClick={() => { close(); onLog(); }}><ListBullets size={15} /> Changelog</div>
         {canManage && <div className="popmenu-item" onClick={() => { onLock(); close(); }}><span className="lock-ico" key={page.locked ? 'l' : 'u'}>{page.locked ? <Lock size={15} weight="fill" /> : <LockOpen size={15} weight="fill" />}</span> {page.locked ? 'Unlock page' : 'Lock (read-only)'}</div>}
-        {canManage && <><div className="popmenu-sep" /><div className="popmenu-item danger" onClick={() => { close(); onDelete(); }}><Trash2 size={15} /> Delete page</div></>}
+        {canDelete && <><div className="popmenu-sep" /><div className="popmenu-item danger" onClick={() => { close(); onDelete(); }}><Trash2 size={15} /> Delete page</div></>}
       </>}
     </Popover>
   );
@@ -1107,18 +1002,22 @@ function Workspace({ me, setMe, onLogout }) {
   // shared links all work
   const pageIdFromUrl = () => (location.pathname.match(/^\/page\/([\w-]+)/) || [])[1] || null;
   const [currentId, setCurrentId] = useState(pageIdFromUrl);
+  const [home, setHome] = useState(() => location.pathname === '/map' ? 'map' : 'overview'); // what shows when no page is open
+  const homeRef = useRef(home); homeRef.current = home;
+  const homePath = (h) => (h === 'map' ? '/map' : '/');
+  const goHome = (h) => { setHome(h); setCurrentId(null); if (!currentIdRef.current) history.pushState({ pageId: null, home: h }, '', homePath(h)); };
   const currentIdRef = useRef(null); currentIdRef.current = currentId;
   const popRef = useRef(false);
   useEffect(() => {
-    history.replaceState({ pageId: currentId }, '', currentId ? '/page/' + currentId + location.hash : '/');
-    const onPop = (e) => { popRef.current = true; setCurrentId(e.state?.pageId ?? pageIdFromUrl()); };
+    history.replaceState({ pageId: currentId, home }, '', currentId ? '/page/' + currentId + location.hash : homePath(home));
+    const onPop = (e) => { popRef.current = true; setCurrentId(e.state?.pageId ?? pageIdFromUrl()); if (e.state?.home) setHome(e.state.home); else if (!e.state?.pageId) setHome(location.pathname === '/map' ? 'map' : 'overview'); };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
   useEffect(() => {
     if (popRef.current) { popRef.current = false; return; }
     if (history.state && history.state.pageId === currentId) return;
-    history.pushState({ pageId: currentId }, '', currentId ? '/page/' + currentId : '/');
+    history.pushState({ pageId: currentId, home: homeRef.current }, '', currentId ? '/page/' + currentId : homePath(homeRef.current));
   }, [currentId]);
   const [page, setPage] = useState(null);
   const [sharing, setSharing] = useState(false);
@@ -1171,6 +1070,13 @@ function Workspace({ me, setMe, onLogout }) {
   const [wsMembers, setWsMembers] = useState([]);
   useEffect(() => { if (currentWsId) api('/workspaces/' + currentWsId + '/members').then(setWsMembers).catch(() => setWsMembers([])); }, [currentWsId]);
   const canManage = me.is_admin === 1 || wsMembers.find(m => m.id === me.id)?.role === 'manage';
+  // what this user's role may do here (Settings > Permissions); managers can do everything
+  const [policy, setPolicy] = useState(null);
+  const loadPolicy = () => currentWsId ? api('/workspaces/' + currentWsId + '/policy').then(setPolicy).catch(() => setPolicy(null)) : null;
+  useEffect(() => { loadPolicy(); }, [currentWsId]);
+  const can = (k) => canManage || !!policy?.can?.[k];
+  const caps = { create: can('create'), subpage: can('subpage'), move: can('move'), delete: can('delete'), cards: can('cards'), api: policy ? policy.can.api : true };
+  const editorPrefs = useMemo(() => { try { return { ...PREF_DEFAULTS, ...JSON.parse(me.prefs || '{}') }; } catch { return { ...PREF_DEFAULTS }; } }, [me.prefs]);
   const crumbs = useMemo(() => {
     const byId = Object.fromEntries(pages.map(p => [p.id, p]));
     const chain = []; const seen = new Set(); let c = byId[currentId];
@@ -1191,6 +1097,7 @@ function Workspace({ me, setMe, onLogout }) {
     if (!treeSync) return;
     const obs = (e) => {
       refreshTree();
+      if (e?.keysChanged?.has('v')) loadPolicy();
       // live page-meta refresh: if someone bumps the page we're viewing (lock/unlock,
       // publish, etc.), refetch it so read-only state updates without a reload
       try { const cid = currentIdRef.current; if (cid && e?.keysChanged?.has('p:' + cid)) api('/pages/' + cid).then(setPage).catch(() => {}); } catch {}
@@ -1247,7 +1154,7 @@ function Workspace({ me, setMe, onLogout }) {
   }, []);
 
   const newPage = async (parent_id = null) => { const p = await api('/pages', { method: 'POST', body: { parent_id, title: '', workspace_id: currentWsId } }); await refreshTree(); bumpTree(); focusTitleNext.current = true; setCurrentId(p.id); };
-  shortcutRef.current = { newPage: () => { if (canManage) newPage(null); } };
+  shortcutRef.current = { newPage: () => { if (caps.create) newPage(null); } };
   const pageUrl = (id) => location.origin + '/page/' + id;
   const copyLink = (id) => navigator.clipboard?.writeText(pageUrl(id)).catch(() => {});
   // duplicate: content comes from the live editor when it is the open page (unsaved keystrokes included)
@@ -1276,7 +1183,8 @@ function Workspace({ me, setMe, onLogout }) {
     editorApi.current.replaceAll(blocks.length ? blocks : [{ type: 'paragraph' }]);
     setVersionsOpen(false);
   };
-  const del = async (id) => { await api('/pages/' + id, { method: 'DELETE' }); if (currentId === id) setCurrentId(null); refreshTree(); bumpTree(); };
+  const del = async (id) => { try { await api('/pages/' + id, { method: 'DELETE' }); } catch {} if (currentId === id) setCurrentId(null); refreshTree(); bumpTree(); };
+  const delConfirm = async (id) => { if (await confirm('Delete this page? It moves to Trash.', { danger: true, confirmLabel: 'Delete page' })) del(id); };
   const move = async (dragId, targetId, zone) => {
     let parent_id, position;
     if (zone === 'root') { parent_id = null; position = (Math.max(0, ...pages.filter(p => !p.parent_id).map(p => p.position)) || 0) + 1; }
@@ -1389,23 +1297,26 @@ function Workspace({ me, setMe, onLogout }) {
           </div>
         </div>
         <div className="tree-scroll">
-          <div className={'root-node' + (!currentId ? ' on' : '')} onClick={() => setCurrentId(null)} title="Workspace overview & map"><Share2 size={17} /><span>Overview</span></div>
+          <div className="sb-nav">
+            <button className={'sb-nav-btn' + (!currentId && home === 'overview' ? ' on' : '')} onClick={() => goHome('overview')} title="Workspace overview"><SquaresFour size={16} /><span>Overview</span></button>
+            <button className={'sb-nav-btn' + (!currentId && home === 'map' ? ' on' : '')} onClick={() => goHome('map')} title="Map of how pages connect"><GraphIcon size={16} /><span>Map</span></button>
+          </div>
           {favs.some(id => pages.some(p => p.id === id)) && <div className="sb-section">
             <div className="sb-section-head"><Star size={12} weight="fill" /> Favorites</div>
             {favs.map(id => pages.find(p => p.id === id)).filter(Boolean).map(p => <div key={p.id} className={'tree-row fav-row' + (p.id === currentId ? ' active' : '')} onClick={() => setCurrentId(p.id)} onContextMenu={(e) => { e.preventDefault(); setTreeMenu({ id: p.id, x: e.clientX, y: e.clientY }); }}><span className="tree-label"><span className="ic"><PageIcon icon={p.icon} size={17} /></span><span className="tl-text">{p.title || 'Untitled'}</span></span></div>)}
             <div className="sb-section-head" style={{ marginTop: 8 }}>Pages</div>
           </div>}
-          <Tree pages={pages} currentId={currentId} onOpen={setCurrentId} onNew={newPage} onDelete={del} onMove={move} onLink={onLink} onContext={(id, x, y) => setTreeMenu({ id, x, y })} canManage={canManage} collapsedInit={prefs.treeCollapsed} onCollapse={(ids) => savePref({ treeCollapsed: ids })} />
-          {canManage && <div className="newpage-wrap">
+          <Tree pages={pages} currentId={currentId} onOpen={setCurrentId} onNew={newPage} onDelete={delConfirm} onMove={move} onLink={onLink} onContext={(id, x, y) => setTreeMenu({ id, x, y })} canManage={canManage} caps={caps} collapsedInit={prefs.treeCollapsed} onCollapse={(ids) => savePref({ treeCollapsed: ids })} />
+          {caps.create && <div className="newpage-wrap">
             <button className="newpage" onClick={() => setTplMenu(v => !v)}><Plus size={16} /> New page</button>
             {tplMenu && <>
               <div className="picker-overlay" onClick={() => setTplMenu(false)} />
               <div className="tpl-menu">
-                <div className="tpl-item" onClick={() => { setTplMenu(false); newPage(null); }}><Pencil size={15} /> New doc</div>
+                <div className="tpl-item" onClick={() => { setTplMenu(false); newPage(null); }}><Pencil size={15} /> New page</div>
                 <div className="tpl-item" onClick={() => { setTplMenu(false); newBoard(); }}><BoardGlyph size={15} /> New board</div>
                 {templates.length > 0 && <div className="tpl-sec">Templates</div>}
                 {templates.map(t => <div className="tpl-item" key={t.id} onClick={() => { setTplMenu(false); newFromTemplate(t.id); }}><PageIcon icon={t.icon || 'ph:File'} size={16} /><span className="grow">{t.name}</span><span className="tpl-x" onClick={e => { e.stopPropagation(); delTemplate(t.id); }}>×</span></div>)}
-                {page && <div className="tpl-item save" onClick={() => { setTplMenu(false); saveAsTemplate(); }}><Plus size={14} /> Save current page as template</div>}
+                {page && canManage && <div className="tpl-item save" onClick={() => { setTplMenu(false); saveAsTemplate(); }}><Plus size={14} /> Save current page as template</div>}
               </div>
             </>}
           </div>}
@@ -1426,13 +1337,15 @@ function Workspace({ me, setMe, onLogout }) {
           ? <div className="empty-home">
               <Logo size={52} />
               <div className="empty-title">{currentWs.name}</div>
-              <div className="empty-sub">{canManage ? 'Create your first page or board to get started.' : 'No pages here yet.'}</div>
-              {canManage && <div className="row gap" style={{ marginTop: 18 }}>
-                <button className="btn-soft" onClick={() => newPage(null)}><Pencil size={15} /> New doc</button>
+              <div className="empty-sub">{caps.create ? 'Create your first page or board to get started.' : 'No pages here yet.'}</div>
+              {caps.create && <div className="row gap" style={{ marginTop: 18 }}>
+                <button className="btn-soft" onClick={() => newPage(null)}><Pencil size={15} /> New page</button>
                 <button className="btn-soft" onClick={() => newBoard()}><BoardGlyph size={15} /> New board</button>
               </div>}
             </div>
-          : <WorkspaceHome workspace={currentWs} pages={pages} canManage={canManage} onOpen={setCurrentId} onNewDoc={() => newPage(null)} onNewBoard={() => newBoard()} onTagClick={(name, color) => setTagFilter({ name, color })} />)}
+          : home === 'map'
+            ? <MapView workspace={currentWs} onOpen={setCurrentId} />
+            : <Overview workspace={currentWs} pages={pages} members={wsMembers} favs={favs} canCreate={caps.create} onOpen={setCurrentId} onNewPage={() => newPage(null)} onNewBoard={() => newBoard()} onTag={(name, color) => setTagFilter({ name, color })} onMap={() => goHome('map')} />)}
         {page && (
           <>
             <div className="page-bar">
@@ -1445,7 +1358,7 @@ function Workspace({ me, setMe, onLogout }) {
                 {!page.can_edit && !page.locked && <span className="chip-mini"><Eye size={11} /> View only</span>}
                 <FacePile members={wsMembers} onClick={() => page.can_admin && setSharing(true)} />
                 {page.can_admin && <button className="btn-share" onClick={() => setSharing(true)}><Share2 size={13} /> Share</button>}
-                <PageMenu page={page} canManage={page.can_admin} canEdit={!!page.can_edit} isFav={favs.includes(page.id)} wordCount={editorApi.current?.getWordCount?.() || 0} onFav={() => toggleFav(page.id)} onCopyLink={() => copyLink(page.id)} onDuplicate={() => duplicatePage(page.id)} onExport={exportMarkdown} onVersions={() => setVersionsOpen(true)} onLog={() => setLogOpen(true)} onLock={() => setLocked(!page.locked)} onDelete={async () => { if (await confirm('Delete this page? It moves to Trash.', { danger: true, confirmLabel: 'Delete page' })) { const parent = page.parent_id; await api('/pages/' + page.id, { method: 'DELETE' }); setCurrentId(parent || null); refreshTree(); bumpTree(); } }} />
+                <PageMenu page={page} canManage={page.can_admin} canDelete={page.can_delete ?? page.can_admin} canDuplicate={caps.create || (caps.subpage && !!page.can_edit)} canEdit={!!page.can_edit} isFav={favs.includes(page.id)} wordCount={editorApi.current?.getWordCount?.() || 0} onFav={() => toggleFav(page.id)} onCopyLink={() => copyLink(page.id)} onDuplicate={() => duplicatePage(page.id)} onExport={exportMarkdown} onVersions={() => setVersionsOpen(true)} onLog={() => setLogOpen(true)} onLock={() => setLocked(!page.locked)} onDelete={async () => { if (await confirm('Delete this page? It moves to Trash.', { danger: true, confirmLabel: 'Delete page' })) { const parent = page.parent_id; await api('/pages/' + page.id, { method: 'DELETE' }); setCurrentId(parent || null); refreshTree(); bumpTree(); } }} />
               </div>
             </div>
             <input ref={coverInputRef} type="file" accept="image/*" hidden onChange={pickCover} />
@@ -1469,11 +1382,11 @@ function Workspace({ me, setMe, onLogout }) {
                 {page.can_edit
                   ? <textarea className="board-desc-in" placeholder="Add a description…" rows={1} ref={el => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} value={page.description || ''} onInput={e => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }} onChange={e => { setPage({ ...page, description: e.target.value }); save({ description: e.target.value }); }} />
                   : (page.description ? <div className="board-desc-text">{page.description}</div> : null)}
-                <Board page={page} pages={pages} canManage={canManage} canContribute={!!page.can_edit} onOpen={setCurrentId} onAddCard={addCard} onMoveCard={moveCard} onDeleteCard={deleteCard} onAddColumn={addColumn} onUpdateColumn={updateColumn} onDeleteColumn={deleteColumn} />
+                <Board page={page} pages={pages} canManage={canManage} canContribute={!!page.can_edit && caps.cards} onOpen={setCurrentId} onAddCard={addCard} onMoveCard={moveCard} onDeleteCard={deleteCard} onAddColumn={addColumn} onUpdateColumn={updateColumn} onDeleteColumn={deleteColumn} />
                 </>
                 : <>
                 <Properties tags={tags} editable={!!page.can_edit} workspace={currentWsId} onTagClick={(name, color) => setTagFilter({ name, color })} onChange={(t) => { setPage({ ...page, tags: JSON.stringify(t) }); save({ tags: t }); }} />
-                <Editor page={page} editable={!!page.can_edit} pages={pages} apiRef={editorApi} me={me} uploadFile={uploadFile} onChange={(content) => save({ content })} />
+                <Editor page={page} editable={!!page.can_edit} pages={pages} apiRef={editorApi} me={me} uploadFile={uploadFile} enterMode={editorPrefs.enterMode} showPointers={editorPrefs.pointers !== false} onChange={(content) => save({ content })} />
                 {backlinks.length > 0 && <div className="backlinks">
                   <div className="bl-head clickable" onClick={() => setBlOpen(v => !v)}>{blOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />} Linked references <span className="muted">({backlinks.length})</span></div>
                   {blOpen && backlinks.map(b => <div className="bl" key={b.id} onClick={() => setCurrentId(b.id)}><PageIcon icon={b.icon} size={14} /><span>{b.title || 'Untitled'}</span></div>)}
@@ -1494,17 +1407,17 @@ function Workspace({ me, setMe, onLogout }) {
           <div className="popmenu-item" onClick={() => act(() => window.open(pageUrl(tp.id), '_blank'))}><ArrowSquareOut size={15} /> Open in new tab</div>
           <div className="popmenu-item" onClick={() => act(() => toggleFav(tp.id))}><Star size={15} weight={favs.includes(tp.id) ? 'fill' : 'regular'} /> {favs.includes(tp.id) ? 'Remove from favorites' : 'Add to favorites'}</div>
           <div className="popmenu-item" onClick={() => act(() => copyLink(tp.id))}><LinkSimple size={15} /> Copy link</div>
-          {canManage && <>
+          {(tp.can_edit || canManage) && <>
             <div className="popmenu-sep" />
-            <div className="popmenu-item" onClick={() => act(() => newPage(tp.id))}><Plus size={15} /> New subpage</div>
+            {(canManage || caps.subpage) && tp.view !== 'column' && <div className="popmenu-item" onClick={() => act(() => newPage(tp.id))}><Plus size={15} /> New sub-page</div>}
             <div className="popmenu-item" onClick={() => act(() => { focusTitleNext.current = true; if (currentId === tp.id) { titleRef.current?.focus(); titleRef.current?.select?.(); focusTitleNext.current = false; } else setCurrentId(tp.id); })}><Pencil size={15} /> Rename</div>
-            {tp.view !== 'board' && tp.view !== 'column' && <div className="popmenu-item" onClick={() => act(() => duplicatePage(tp.id))}><CopySimple size={15} /> Duplicate</div>}
-            <div className="popmenu-sep" />
-            <div className="popmenu-item danger" onClick={() => act(async () => { if (await confirm('Delete this page? It moves to Trash.', { danger: true, confirmLabel: 'Delete page' })) del(tp.id); })}><Trash2 size={15} /> Delete</div>
+            {tp.view !== 'board' && tp.view !== 'column' && (canManage || caps.create || caps.subpage) && <div className="popmenu-item" onClick={() => act(() => duplicatePage(tp.id))}><CopySimple size={15} /> Duplicate</div>}
+            {(canManage || caps.delete) && <><div className="popmenu-sep" />
+            <div className="popmenu-item danger" onClick={() => act(() => delConfirm(tp.id))}><Trash2 size={15} /> Delete</div></>}
           </>}
         </div>
       </>, document.body); })()}
-      {settings && <Settings me={me} setMe={setMe} currentWs={currentWs} onWsChange={loadWs} onLogout={onLogout} onImported={() => { refreshTree(); bumpTree(); }} onClose={() => setSettings(false)} />}
+      {settings && <Settings me={me} setMe={setMe} currentWs={currentWs} canManage={canManage} pages={pages} caps={caps} initialTab={typeof settings === 'string' ? settings : undefined} onWsChange={loadWs} onLogout={onLogout} onImported={() => { refreshTree(); bumpTree(); }} onClose={() => setSettings(false)} />}
       {searching && <Search workspace={currentWsId} recent={recent} pages={pages} onOpen={setCurrentId} onClose={() => setSearching(false)} />}
       {wsModal && <NewWorkspaceModal onCreate={createWs} onClose={() => setWsModal(false)} />}
     </div>

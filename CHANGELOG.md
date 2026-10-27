@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.4.0 (2026-10-27)
+
+A quality-of-life release: a bigger, calmer sidebar, a real map, live pointers, Claude Code built in, and permissions you can read at a glance. Data format is unchanged; update as usual.
+
+### Sidebar and navigation
+- **Overview and Map** are two buttons at the top of the sidebar. Overview is the workspace home: counts, recently edited pages, favorites, activity and tags. Map is the page graph, now full-screen (`/map`).
+- **Roomier tree**: taller rows, larger text and icons, a 20px indent per level, titles that ellipsize instead of wrapping, row actions that no longer push the title around.
+- **Dragging pages is clearer**: the drop line is indented to the level the page will land on, the ghost says "into" or "next to", collapsed sections open when you hover them while dragging, the list auto-scrolls near its edges, and a "Move to top level" zone appears at the bottom.
+- Everything that was called a "doc" is now a **page**. Boards are still boards.
+
+### Map
+- Rebuilt on a canvas, Obsidian-style: scroll to zoom, drag to pan, drag a node to move it, click to open, double-click to fit. Node size grows with its links; hovering highlights a page's neighbors and dims the rest.
+- Search box that highlights matches (Enter opens the first), Boards and Unlinked toggles, tag filters, a tooltip with link counts. Columns are folded into their board so a board reads as one hub with its cards.
+- Handles hundreds of pages smoothly; the layout settles instead of drifting forever.
+
+### Collaboration
+- **Live pointers**: you can see where teammates on the same page are pointing, as a faded arrow with their name, anchored to the block under their mouse so it lands right on any screen size. Turn it off in Settings > My account > Editor.
+- **Typing side by side no longer glitches**: the remote caret took a pixel of width (text shifted on every keystroke) and its name flag re-animated on every update. The caret is now zero-width and the flag is static. Remote selections are a flat tint that also works on the light theme.
+
+### Editor
+- **Enter and Shift+Enter**: Enter now adds a line inside the block, Shift+Enter starts a new block. Lists, the slash menu, code blocks and tables keep their own behavior. Prefer the classic way? Settings > My account > Editor.
+- Dragging a block tints the block being moved and auto-scrolls the page near the edges.
+
+### Claude Code
+- **Settings > Claude Code** creates a personal token and shows the one command that connects Claude Code (`claude mcp add --transport http …`). NoteBit serves MCP at `/mcp` (Streamable HTTP), so there is nothing to install.
+- Tools: list workspaces, list pages, search, read a page as Markdown, create/update/append/move/delete pages, create boards and cards, add comments. Claude acts as you and sees only what you can see; a workspace can turn it off per role.
+- Server-side writes go straight into the live collaborative document, so a page Claude edits updates on screen for everyone who has it open. Markdown conversion lives on the server (`server/md.js`); `GET /api/pages/:id?format=md` returns any page as Markdown.
+
+### Permissions
+- **Settings > Permissions** (managers): a grid of actions by role. Toggle what Read and Write members may do: edit, comment, create top-level pages, create sub-pages, move, delete, publish, use boards, save templates, connect Claude Code. Managers always can.
+- **Page access** from the same tab: pick any page, set per-person roles, lock it, publish it, and see every page that has its own rules.
+- The UI follows the policy (New page, sub-page and delete actions appear only when allowed) and the server enforces it.
+
+### Polish
+- Settings is wider with consistent sections; Editor preferences live under My account. Delete from the sidebar now asks first. Consistent radii, button sizes and spacing across the app.
+
 ## 1.3.0 (2026-08-18)
 
 A quality pass on the editor plus the everyday things a Notion-style workspace needs. Data format is unchanged; update as usual.

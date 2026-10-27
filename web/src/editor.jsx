@@ -7,7 +7,7 @@ import { useCreateBlockNote, SuggestionMenuController, getDefaultReactSlashMenuI
 import { BlockNoteView } from '@blocknote/mantine';
 import { filterSuggestionItems, insertOrUpdateBlock, getNodeById } from '@blocknote/core';
 import { Extension } from '@tiptap/core';
-import { Plugin, TextSelection, NodeSelection } from 'prosemirror-state';
+import { Plugin, PluginKey, TextSelection, NodeSelection } from 'prosemirror-state';
 import { DOMParser as PMDOMParser } from 'prosemirror-model';
 import '@blocknote/mantine/style.css';
 import * as Y from 'yjs';
@@ -59,6 +59,76 @@ const makePasteExtension = (getEditor) => Extension.create({
   },
 });
 
+// ---------- Enter / Shift+Enter ----------
+// Preference "newline": Enter inserts a line break inside the block, Shift+Enter starts a
+// new block (the reverse of the default). Done by re-dispatching the key with the shift
+// state flipped through every other keymap, so lists, the slash menu, code blocks and
+// tables keep their own behavior. Inside code blocks and tables nothing is swapped.
+const SWAP_FLAG = '__nbSwapped';
+const makeEnterSwapExtension = (getMode) => Extension.create({
+  name: 'notebitEnter',
+  priority: 2000,
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      key: new PluginKey('notebitEnter'),
+      props: {
+        handleKeyDown(view, event) {
+          if (event[SWAP_FLAG] || getMode() !== 'newline') return false;
+          if (event.key !== 'Enter' || event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return false;
+          const $from = view.state.selection.$from;
+          for (let d = $from.depth; d > 0; d--) { const t = $from.node(d).type.name; if (t === 'codeBlock' || t === 'tableParagraph' || t === 'tableCell' || t === 'table') return false; }
+          const fake = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', shiftKey: !event.shiftKey, bubbles: false, cancelable: true });
+          try { Object.defineProperty(fake, SWAP_FLAG, { value: true }); } catch {}
+          const handled = view.someProp('handleKeyDown', f => f(view, fake));
+          if (handled) { event.preventDefault(); return true; }
+          return false;
+        },
+      },
+    })];
+  },
+});
+
+// ---------- live pointers (teammates' mouse positions) ----------
+// Shared through the same Yjs awareness channel as the text cursors. The position is
+// anchored to the block under the pointer (plus fractions of its box), so it lands in
+// the right place on screens of any width.
+const POINTER_IDLE_MS = 12000;
+function RemotePointers({ provider, wrapRef, enabled, docRef }) {
+  const [states, setStates] = useState([]);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!provider) return;
+    const aw = provider.awareness;
+    const read = () => {
+      const out = [];
+      aw.getStates().forEach((st, id) => { if (id !== aw.clientID && st?.pointer && st?.user) out.push({ id, user: st.user, pointer: st.pointer }); });
+      setStates(out);
+    };
+    read(); aw.on('change', read);
+    const t = setInterval(() => tick(v => v + 1), 2500);           // drop idle pointers
+    const onScroll = () => tick(v => v + 1);
+    document.addEventListener('scroll', onScroll, true); window.addEventListener('resize', onScroll);
+    return () => { aw.off('change', read); clearInterval(t); document.removeEventListener('scroll', onScroll, true); window.removeEventListener('resize', onScroll); };
+  }, [provider]);
+  if (!enabled || !states.length) return null;
+  const wrap = wrapRef.current; const docEl = docRef?.current || wrap?.closest?.('.doc');
+  const now = Date.now();
+  const items = states.map(({ id, user, pointer }) => {
+    if (!pointer || now - (pointer.t || 0) > POINTER_IDLE_MS) return null;
+    let x, y;
+    const el = pointer.bid && wrap ? wrap.querySelector(`[data-id="${CSS.escape(pointer.bid)}"]`) : null;
+    if (el) { const r = el.getBoundingClientRect(); x = r.left + pointer.fx * r.width; y = r.top + pointer.fy * r.height; }
+    else if (docEl) { const r = docEl.getBoundingClientRect(); x = r.left + pointer.fx * r.width; y = r.top + pointer.py; }
+    else return null;
+    if (y < -40 || y > window.innerHeight + 40) return null;
+    return <div key={id} className="rp" style={{ transform: `translate(${Math.round(x)}px,${Math.round(y)}px)`, '--rc': user.color || '#a78bdb' }}>
+      <svg width="18" height="18" viewBox="0 0 24 24"><path d="M4 2l5 16 2.5-6.5L18 9 4 2z" fill="var(--rc)" stroke="rgba(0,0,0,.35)" strokeWidth="1" strokeLinejoin="round" /></svg>
+      <span className="rp-name">{user.name}</span>
+    </div>;
+  }).filter(Boolean);
+  return createPortal(<div className="rp-layer">{items}</div>, document.body);
+}
+
 // ---------- side menu handle: drag to move, click for the block menu ----------
 function DragHandle({ block, blockDragStart, blockDragEnd, onOpen }) {
   const Components = useComponentsContext();
@@ -73,7 +143,7 @@ function DragHandle({ block, blockDragStart, blockDragEnd, onOpen }) {
 const TEXT_COLORS = ['default', 'gray', 'brown', 'red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink'];
 const COLOR_HEX = { default: 'var(--text)', gray: '#9b9a97', brown: '#bb8264', red: '#ff5d52', orange: '#e3902f', yellow: '#dfab01', green: '#4dab6d', blue: '#3f9cdb', purple: '#9a6dd7', pink: '#e255a1' };
 
-export function Editor({ page, editable, pages, onChange, apiRef, me, uploadFile, onOpenPage }) {
+export function Editor({ page, editable, pages, onChange, apiRef, me, uploadFile, onOpenPage, enterMode = 'newline', showPointers = true }) {
   const { ydoc, provider } = useMemo(() => {
     const ydoc = new Y.Doc();
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -83,11 +153,13 @@ export function Editor({ page, editable, pages, onChange, apiRef, me, uploadFile
   useEffect(() => () => { provider.destroy(); ydoc.destroy(); }, [provider, ydoc]);
   const editorRef = useRef(null);
   const pasteExt = useMemo(() => makePasteExtension(() => editorRef.current), []);
+  const enterModeRef = useRef(enterMode); enterModeRef.current = enterMode;
+  const enterExt = useMemo(() => makeEnterSwapExtension(() => enterModeRef.current), []);
   const editor = useCreateBlockNote({
     schema,
     collaboration: { provider, fragment: ydoc.getXmlFragment('document'), user: { name: me?.name || me?.email || 'Someone', color: userColor(me?.id) } },
     uploadFile,
-    _tiptapOptions: { extensions: [pasteExt] },
+    _tiptapOptions: { extensions: [pasteExt, enterExt] },
   }, [page.id]);
   editorRef.current = editor;
   if (import.meta.env.DEV) window.__nb = { editor, ydoc, provider, PMDOMParser }; // dev-only debugging hook
@@ -105,6 +177,26 @@ export function Editor({ page, editable, pages, onChange, apiRef, me, uploadFile
     return () => { try { provider.off('sync', onSync); } catch {} };
   }, [provider, editor, ydoc]);
   const wrapRef = useRef(null);
+  // publish where our pointer is (block-anchored), at most every 50ms; cleared when it leaves the page column
+  useEffect(() => {
+    if (!showPointers) { try { provider.awareness.setLocalStateField('pointer', null); } catch {} return; }
+    let last = 0, timer = 0, pending = null;
+    const send = () => { timer = 0; try { provider.awareness.setLocalStateField('pointer', pending); } catch {} last = performance.now(); };
+    const onMove = (e) => {
+      const wrap = wrapRef.current; const docEl = wrap?.closest('.doc'); if (!docEl) return;
+      const dr = docEl.getBoundingClientRect();
+      const inside = e.clientX >= dr.left - 40 && e.clientX <= dr.right + 40 && e.clientY >= dr.top && e.clientY <= dr.bottom;
+      if (!inside) { if (pending) { pending = null; send(); } return; }
+      const blk = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.bn-editor [data-id]');
+      if (blk && wrap.contains(blk)) { const r = blk.getBoundingClientRect(); pending = { bid: blk.getAttribute('data-id'), fx: (e.clientX - r.left) / Math.max(1, r.width), fy: (e.clientY - r.top) / Math.max(1, r.height), t: Date.now() }; }
+      else pending = { bid: null, fx: (e.clientX - dr.left) / Math.max(1, dr.width), py: e.clientY - dr.top, t: Date.now() };
+      const dt = performance.now() - last;
+      if (dt > 50) send(); else if (!timer) timer = setTimeout(send, 50 - dt);
+    };
+    const onLeave = () => { pending = null; send(); };
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseleave', onLeave); window.addEventListener('blur', onLeave);
+    return () => { clearTimeout(timer); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseleave', onLeave); window.removeEventListener('blur', onLeave); try { provider.awareness.setLocalStateField('pointer', null); } catch {} };
+  }, [provider, showPointers]);
   // ---- imperative API for the page shell (title Enter -> editor, sidebar drop -> mention, deep links)
   useEffect(() => {
     if (!apiRef) return;
@@ -194,15 +286,22 @@ export function Editor({ page, editable, pages, onChange, apiRef, me, uploadFile
       } catch {}
     };
     let raf = 0, last = 0, pend = null;
+    const autoScroll = (y) => {
+      const main = wrapRef.current?.closest('.main'); if (!main) return;
+      const r = main.getBoundingClientRect(); const edge = 70;
+      if (y < r.top + edge) main.scrollTop -= Math.ceil((r.top + edge - y) / 4);
+      else if (y > r.bottom - edge) main.scrollTop += Math.ceil((y - (r.bottom - edge)) / 4);
+    };
     const onDragOver = (e) => {
       const d = dragRef.current; if (!d) return;
+      autoScroll(e.clientY);
       if (e.target.closest?.('.sidebar, .clog, .inbox-pop, .search-box, .card')) { showDropInd(null); return; }
       pend = [e.clientX, e.clientY];
       const now = performance.now();
       if (now - last > 16) { last = now; cancelAnimationFrame(raf); raf = 0; showDropInd(computeSeam(pend[0], pend[1], d.ids)); }
       else if (!raf) raf = requestAnimationFrame(() => { raf = 0; last = performance.now(); if (dragRef.current && pend) showDropInd(computeSeam(pend[0], pend[1], dragRef.current.ids)); });
     };
-    const finish = () => { dragRef.current = null; showDropInd(null); wrapRef.current?.classList.remove('handle-drag'); };
+    const finish = () => { dragRef.current = null; showDropInd(null); wrapRef.current?.classList.remove('handle-drag'); if (dragLayerRef.current) dragLayerRef.current.innerHTML = ''; };
     const onDrop = (e) => {
       const d = dragRef.current;
       if (!d || e.synthetic) return;
@@ -233,6 +332,13 @@ export function Editor({ page, editable, pages, onChange, apiRef, me, uploadFile
     return () => { cancelAnimationFrame(raf); window.removeEventListener('dragstart', onDragStart, true); window.removeEventListener('dragover', onDragOver, true); window.removeEventListener('drop', onDrop, true); window.removeEventListener('dragend', onDragEnd, true); };
   }, [editor]);
 
+  // ghost tint over the blocks being dragged (drawn in an overlay, never in editor DOM)
+  const dragLayerRef = useRef(null);
+  const paintDragGhost = (ids) => {
+    const layer = dragLayerRef.current, wrap = wrapRef.current; if (!layer || !wrap) return;
+    layer.innerHTML = ''; const wr = wrap.getBoundingClientRect();
+    for (const id of ids) { const el = wrap.querySelector(`[data-id="${CSS.escape(id)}"]`); if (!el) continue; const r = el.getBoundingClientRect(); const d = document.createElement('div'); d.style.cssText = `left:${r.left - wr.left - 5}px;top:${r.top - wr.top}px;width:${r.width + 10}px;height:${r.height}px`; layer.appendChild(d); }
+  };
   // ---------- hover tint (overlay outside the editor DOM) ----------
   // Never mutate classes on ProseMirror-managed nodes: PM's mutation observer re-syncs
   // on any change inside the editor and stomps the selection.
@@ -568,6 +674,8 @@ export function Editor({ page, editable, pages, onChange, apiRef, me, uploadFile
     <div className="editor-wrap" ref={wrapRef} onClick={clickBlank} onPointerDown={(e) => { if (e.button === 0) marqueeSelRef.current = null; rightDrag(e); }} onContextMenu={onCtxMenu}>
     <div className="blk-hl" ref={hlRef} />
     <div className="box-sel-layer" ref={selLayerRef} />
+    <div className="drag-ghost-layer" ref={dragLayerRef} />
+    <RemotePointers provider={provider} wrapRef={wrapRef} enabled={showPointers} />
     <div className="drop-ind" ref={dropIndRef} />
     {box && <div className="box-rect" style={{ left: box.l, top: box.t, width: box.w, height: box.h }} />}
     {menu && createPortal(<>
@@ -641,6 +749,7 @@ export function Editor({ page, editable, pages, onChange, apiRef, me, uploadFile
               try { const bs = editor.getSelection()?.blocks; if (bs?.length > 1 && bs.some(b => b.id === p.block.id)) ids = bs.map(b => b.id); } catch {}
               dragRef.current = { ids, handle: true };
               wrapRef.current?.classList.add('handle-drag');
+              setTimeout(() => paintDragGhost(ids), 0);
             }
             hl(null, false);
           }}>

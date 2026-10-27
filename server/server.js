@@ -16,11 +16,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { markdownToBlocks, blocksToMarkdown } from './md.js';
+import { writeBlocks, readBlocks } from './ycontent.js';
+import { makeMcp } from './mcp.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.WIKI_DB || path.join(__dirname, 'data', 'wiki.db');
 const PORT = Number(process.env.PORT || 8200);
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 const ALLOW_SIGNUP = process.env.ALLOW_SIGNUP !== 'false';
 const WEB_DIR = process.env.WEB_DIR || path.join(__dirname, '..', 'web', 'dist');
 
@@ -156,6 +159,8 @@ db.exec("CREATE TABLE IF NOT EXISTS page_log (id TEXT PRIMARY KEY, page_id TEXT 
 db.exec("CREATE INDEX IF NOT EXISTS idx_pagelog_page ON page_log(page_id, created_at)");
 db.exec("CREATE TABLE IF NOT EXISTS page_versions (id TEXT PRIMARY KEY, page_id TEXT NOT NULL, user_id INTEGER, title TEXT, content TEXT, created_at TEXT DEFAULT (datetime('now')))");
 db.exec("CREATE INDEX IF NOT EXISTS idx_pagever ON page_versions(page_id, created_at)");
+db.exec("CREATE TABLE IF NOT EXISTS api_tokens (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, name TEXT, token_hash TEXT UNIQUE NOT NULL, prefix TEXT, created_at TEXT DEFAULT (datetime('now')), last_used_at TEXT)");
+try { db.exec("ALTER TABLE workspaces ADD COLUMN policy TEXT"); } catch {}
 const UPLOAD_DIR = path.join(path.dirname(path.resolve(DB_PATH)), 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const persistYDoc = (name, ydoc) => { try { const u = Y.encodeStateAsUpdate(ydoc); db.prepare('INSERT INTO ydocs (page_id,data) VALUES (?,?) ON CONFLICT(page_id) DO UPDATE SET data=excluded.data').run(name, Buffer.from(u)); } catch {} };
@@ -223,13 +228,15 @@ if (!db.prepare('SELECT 1 FROM workspaces LIMIT 1').get()) {
     { type: 'checkListItem', props: { checked: false }, content: [t('Type '), t('/', { code: true }), t(' anywhere for blocks: headings, lists, to-dos, callouts, toggles, images, tables')] },
     { type: 'checkListItem', props: { checked: false }, content: [t('Drag the '), t('⋮⋮', { code: true }), t(' handle to move a block; box-select from the margins to grab several')] },
     { type: 'checkListItem', props: { checked: false }, content: [t('Click the '), t('⋮⋮', { code: true }), t(' handle (or right-click selected text) for the block menu. Right-click a word for spelling suggestions')] },
-    { type: 'checkListItem', props: { checked: false }, content: [t('Tab nests, Shift+Tab un-nests. '), t('⌘K', { code: true }), t(' searches, '), t('⌘\\', { code: true }), t(' hides the sidebar')] },
+    { type: 'checkListItem', props: { checked: false }, content: [t('Enter adds a line, Shift+Enter starts a new block (swap it in Settings). Tab nests, Shift+Tab un-nests. '), t('⌘K', { code: true }), t(' searches, '), t('⌘\\', { code: true }), t(' hides the sidebar')] },
     { type: 'toggle', props: {}, content: [t('Click the arrow on this toggle')], children: [
       { type: 'paragraph', content: [t('Anything can live inside: text, lists, even more toggles.')] },
     ] },
     { type: 'heading', props: { level: 2 }, content: [t('Make it a team')] },
     { type: 'paragraph', content: [t('Invite people in Settings then People. You will see their cursors live on the page, and comments with @mentions land in the inbox by the search bar.')] },
-    { type: 'paragraph', content: [t('The Overview in the sidebar draws a living map of how your pages connect. The New board button makes a kanban where every card is a page. Every page has a link you can share, a version history, and a Favorites star.')] },
+    { type: 'paragraph', content: [t('Overview shows what changed lately; Map draws how your pages connect. New board makes a kanban where every card is a page. Every page has a link you can share, a version history, and a Favorites star.')] },
+    { type: 'heading', props: { level: 2 }, content: [t('Bring Claude Code')] },
+    { type: 'paragraph', content: [t('Settings then Claude Code gives you a one-line command that connects Claude Code to this workspace. Claude can then read, search, write and move pages for you.')] },
     { type: 'divider', props: {} },
     { type: 'quote', props: {}, content: [t('Notes without the bloat. Or the bill.')] },
   ];
@@ -299,20 +306,66 @@ const hashPw = (pw) => { const s = crypto.randomBytes(16); return s.toString('he
 const verifyPw = (pw, st) => { try { const [s, h] = st.split(':'); return crypto.timingSafeEqual(crypto.scryptSync(pw, Buffer.from(s, 'hex'), 64), Buffer.from(h, 'hex')); } catch { return false; } };
 const SDAYS = 30;
 const newSession = (uid) => { const t = crypto.randomBytes(32).toString('hex'); db.prepare('INSERT INTO sessions (token,user_id,expires_at) VALUES (?,?,?)').run(t, uid, Date.now() + SDAYS * 864e5); return t; };
-const userFromReq = (req) => { const t = req.cookies?.sid; if (!t) return null; const s = db.prepare('SELECT * FROM sessions WHERE token=?').get(t); if (!s || s.expires_at < Date.now()) return null; return db.prepare('SELECT id,email,name,is_admin,avatar,theme,prefs FROM users WHERE id=?').get(s.user_id) || null; };
+const tokenHash = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+const userFromToken = (tok) => {
+  if (!tok || !/^nb_[a-f0-9]{40}$/.test(tok)) return null;
+  const row = db.prepare('SELECT id,user_id FROM api_tokens WHERE token_hash=?').get(tokenHash(tok)); if (!row) return null;
+  const u = db.prepare('SELECT id,email,name,is_admin,avatar,theme,prefs FROM users WHERE id=?').get(row.user_id); if (!u) return null;
+  try { db.prepare("UPDATE api_tokens SET last_used_at=datetime('now') WHERE id=?").run(row.id); } catch {}
+  return { ...u, via: 'token' };
+};
+const userFromReq = (req) => {
+  const auth = req.headers?.authorization || '';
+  if (/^Bearer\s+nb_/i.test(auth)) return userFromToken(auth.replace(/^Bearer\s+/i, '').trim());
+  const t = req.cookies?.sid; if (!t) return null; const s = db.prepare('SELECT * FROM sessions WHERE token=?').get(t); if (!s || s.expires_at < Date.now()) return null; return db.prepare('SELECT id,email,name,is_admin,avatar,theme,prefs FROM users WHERE id=?').get(s.user_id) || null; };
 
 // ---- permissions (Notion-style: owner + admin override + grants, inherited down the tree) ----
 function ancestors(pageId) { const out = []; let cur = pageId, g = 0; while (cur && g++ < 200) { const p = db.prepare('SELECT id,parent_id,owner_id,locked FROM pages WHERE id=?').get(cur); if (!p) break; out.push(p); cur = p.parent_id; } return out; }
-function roleAccess(role) {
+// ---- workspace permission policy: what the Read and Write roles may do, per action.
+// Managers (and super-admins) can always do everything. Stored as JSON on the workspace.
+export const ACTIONS = [
+  { key: 'edit', label: 'Edit pages', desc: 'Change page text, title, icon, tags and cover', def: { read: false, write: true } },
+  { key: 'comment', label: 'Comment', desc: 'Post comments and @mention people', def: { read: true, write: true } },
+  { key: 'create', label: 'Create top-level pages', desc: 'Add new pages and boards at the root of the sidebar', def: { read: false, write: false } },
+  { key: 'subpage', label: 'Create sub-pages', desc: 'Add pages under pages they can edit', def: { read: false, write: true } },
+  { key: 'move', label: 'Move and reorder pages', desc: 'Drag pages around the sidebar and into other pages', def: { read: false, write: true } },
+  { key: 'delete', label: 'Delete pages', desc: 'Trash any page they can edit (otherwise only pages they created)', def: { read: false, write: false } },
+  { key: 'publish', label: 'Publish to the web', desc: 'Make a page readable by anyone with the link', def: { read: false, write: true } },
+  { key: 'cards', label: 'Use boards', desc: 'Add and move cards in member columns', def: { read: false, write: true } },
+  { key: 'templates', label: 'Save templates', desc: 'Turn a page into a workspace template', def: { read: false, write: false } },
+  { key: 'api', label: 'Connect Claude Code', desc: 'Use a personal token (MCP) to read and change what they can already see', def: { read: true, write: true } },
+];
+const policyCache = new Map();
+function wsPolicy(wsId) {
+  if (policyCache.has(wsId)) return policyCache.get(wsId);
+  let pol = {}; try { pol = JSON.parse(db.prepare('SELECT policy FROM workspaces WHERE id=?').get(wsId)?.policy || '{}') || {}; } catch {}
+  const out = { read: {}, write: {} };
+  for (const a of ACTIONS) for (const r of ['read', 'write']) out[r][a.key] = typeof pol?.[r]?.[a.key] === 'boolean' ? pol[r][a.key] : a.def[r];
+  policyCache.set(wsId, out);
+  return out;
+}
+const wsRoleOf = (user, wsId) => wsId ? db.prepare('SELECT role FROM workspace_member WHERE workspace_id=? AND user_id=?').get(wsId, user.id)?.role || null : null;
+// can(user, workspaceId, action): the policy answer for this user's workspace role
+function can(user, wsId, action) {
+  if (!user) return false;
+  if (user.is_admin) return true;
+  const role = wsRoleOf(user, wsId);
+  if (role === 'manage') return true;
+  if (role !== 'read' && role !== 'write') return false;
+  return !!wsPolicy(wsId)[role][action];
+}
+function roleAccess(role, wsId) {
   if (role === 'manage') return { view: true, edit: true, admin: true };
-  if (role === 'write' || role === 'edit') return { view: true, edit: true };
+  const r = role === 'edit' ? 'write' : role;
+  if (r === 'write' || r === 'read') return { view: true, edit: wsId ? !!wsPolicy(wsId)[r].edit : r === 'write' };
   return { view: true, edit: false };
 }
 function columnPerm(columnId) { return db.prepare('SELECT col_perm FROM pages WHERE id=?').get(columnId)?.col_perm === 'manager' ? 'manager' : 'member'; }
 function access(user, pageId) {
   if (!user) return { view: false, edit: false };
-  if (user.is_admin) return { view: true, edit: true, admin: true };
   const page = db.prepare('SELECT workspace_id,parent_id,status FROM pages WHERE id=?').get(pageId);
+  if (user.via === 'token' && page?.workspace_id && !can(user, page.workspace_id, 'api')) return { view: false, edit: false };
+  if (user.is_admin) return { view: true, edit: true, admin: true };
   const wsRole = page?.workspace_id ? db.prepare('SELECT role FROM workspace_member WHERE workspace_id=? AND user_id=?').get(page.workspace_id, user.id)?.role : null;
   let res = null, locked = false;
   if (page?.parent_id) { const par = db.prepare('SELECT view,col_perm FROM pages WHERE id=?').get(page.parent_id); if (par && par.view === 'column' && par.col_perm === 'manager') locked = true; }
@@ -322,11 +375,11 @@ function access(user, pageId) {
       // the creator gets admin by default, but an explicit page grant (set by a
       // workspace manager) overrides it: ownership is a badge, not a superpower
       const g = db.prepare('SELECT role FROM page_access WHERE page_id=? AND user_id=?').get(p.id, user.id);
-      if (g) res = roleAccess(g.role);
+      if (g) res = roleAccess(g.role, null);
       else if (p.owner_id === user.id) res = { view: true, edit: true, admin: true };
     }
   }
-  if (!res && wsRole) res = roleAccess(wsRole);
+  if (!res && wsRole) res = roleAccess(wsRole, page.workspace_id);
   if (!res) res = { view: false, edit: false };
   if (wsRole === 'manage') res = { view: true, edit: true, admin: true }; // managers always keep control
   if (locked && res.view && wsRole !== 'manage') res = { view: true, edit: false, admin: false };
@@ -495,7 +548,7 @@ app.get('/api/templates/:tid', async (req, reply) => {
 });
 app.post('/api/workspaces/:id/templates', async (req, reply) => {
   const u = requireUser(req, reply); if (!u) return;
-  if (!canManageWs(u, req.params.id)) return reply.code(403).send({ error: 'only managers' });
+  if (!can(u, req.params.id, 'templates')) return reply.code(403).send({ error: 'saving templates is a manager action in this workspace' });
   const { name, icon, content } = req.body || {};
   const id = crypto.randomUUID();
   db.prepare('INSERT INTO templates (id,workspace_id,name,icon,content) VALUES (?,?,?,?,?)').run(id, req.params.id, String(name || 'Template').slice(0, 80), icon || null, content || '[]');
@@ -603,6 +656,8 @@ app.post('/api/pages/:id/comments', async (req, reply) => {
   if (!access(u, pageId).view) return reply.code(403).send({ error: 'no access' });
   const body = (req.body?.body || '').trim(); const mentions = req.body?.mentions || [];
   if (!body) return reply.code(400).send({ error: 'empty' });
+  const wsOf = db.prepare('SELECT workspace_id FROM pages WHERE id=?').get(pageId)?.workspace_id;
+  if (!can(u, wsOf, 'comment')) return reply.code(403).send({ error: 'commenting is turned off for your role' });
   const id = crypto.randomUUID();
   db.prepare('INSERT INTO comments (id,page_id,user_id,body,mentions) VALUES (?,?,?,?,?)').run(id, pageId, u.id, body, JSON.stringify(mentions));
   const page = db.prepare('SELECT title,owner_id FROM pages WHERE id=?').get(pageId);
@@ -796,10 +851,10 @@ app.post('/api/pages', async (req, reply) => {
   if (!wsId) wsId = db.prepare('SELECT id FROM workspaces ORDER BY position,created_at LIMIT 1').get()?.id;
   const parentRow = parent_id ? db.prepare('SELECT view,col_perm FROM pages WHERE id=?').get(parent_id) : null;
   let mayAdd;
-  if (!parent_id) mayAdd = canManageWs(u, wsId);                                                                            // new top-level page → workspace managers
-  else if (parentRow?.view === 'column') mayAdd = canManageWs(u, wsId) || (parentRow.col_perm !== 'manager' && access(u, parent_id).edit); // card into a column
-  else mayAdd = canManageWs(u, wsId) || access(u, parent_id).edit;                                                          // sub-page → must be able to edit the parent (blocks locked / read-only)
-  if (!mayAdd) return reply.code(403).send({ error: 'no permission to add here — that section may be locked or read-only' });
+  if (!parent_id) mayAdd = can(u, wsId, 'create');                                                                                   // new top-level page: policy (managers always)
+  else if (parentRow?.view === 'column') mayAdd = canManageWs(u, wsId) || (can(u, wsId, 'cards') && parentRow.col_perm !== 'manager' && access(u, parent_id).edit); // card into a column
+  else mayAdd = canManageWs(u, wsId) || (can(u, wsId, 'subpage') && access(u, parent_id).edit);                                     // sub-page: must be able to edit the parent
+  if (!mayAdd) return reply.code(403).send({ error: 'no permission to add a page here' });
   const id = crypto.randomUUID();
   const pos = (db.prepare('SELECT MAX(position) m FROM pages WHERE parent_id IS ?').get(parent_id)?.m || 0) + 1;
   db.prepare('INSERT INTO pages (id,parent_id,owner_id,workspace_id,title,position,content,status) VALUES (?,?,?,?,?,?,?,?)').run(id, parent_id, u.id, wsId, title, pos, '[]', status);
@@ -812,7 +867,8 @@ app.get('/api/pages/:id', async (req, reply) => {
   const a = access(u, req.params.id); if (!a.view) return reply.code(403).send({ error: 'no access' });
   const p = db.prepare('SELECT * FROM pages WHERE id=?').get(req.params.id);
   if (!p) return reply.code(404).send({ error: 'not found' });
-  return { ...p, can_edit: a.edit, can_admin: !!a.admin };
+  if (req.query?.format === 'md') { reply.header('Content-Type', 'text/markdown; charset=utf-8'); return `# ${p.title || 'Untitled'}\n\n` + blocksToMarkdown(currentBlocks(p)); }
+  return { ...p, can_edit: a.edit, can_admin: !!a.admin, can_delete: mayDelete(u, p.id) };
 });
 app.put('/api/pages/:id', async (req, reply) => {
   const u = requireUser(req, reply); if (!u) return;
@@ -822,13 +878,17 @@ app.put('/api/pages/:id', async (req, reply) => {
   const b = req.body || {};
   if (b.locked !== undefined && !(u.is_admin || canManageWs(u, p.workspace_id))) return reply.code(403).send({ error: 'only managers can lock pages' });
   if (b.col_perm !== undefined && !(u.is_admin || canManageWs(u, p.workspace_id))) return reply.code(403).send({ error: 'only managers can set column access' });
+  if (b.is_public !== undefined && !!b.is_public !== !!p.is_public && !can(u, p.workspace_id, 'publish')) return reply.code(403).send({ error: 'publishing is a manager action in this workspace' });
   if (b.parent_id !== undefined && b.parent_id !== p.parent_id) {
     const tgt = b.parent_id ? db.prepare('SELECT view,col_perm FROM pages WHERE id=?').get(b.parent_id) : null;
     const src = p.parent_id ? db.prepare('SELECT view,col_perm FROM pages WHERE id=?').get(p.parent_id) : null;
+    const cardMove = tgt?.view === 'column' || src?.view === 'column';
+    if (!can(u, p.workspace_id, cardMove ? 'cards' : 'move')) return reply.code(403).send({ error: cardMove ? 'moving cards is turned off for your role' : 'moving pages is turned off for your role' });
     if (((tgt?.view === 'column' && tgt.col_perm === 'manager') || (src?.view === 'column' && src.col_perm === 'manager')) && !(u.is_admin || canManageWs(u, p.workspace_id))) return reply.code(403).send({ error: 'only managers can move cards in/out of that column' });
     // can only move a page INTO a section you can edit — blocks dropping into a locked or read-only page
     if (b.parent_id && tgt?.view !== 'column' && !(canManageWs(u, p.workspace_id) || access(u, b.parent_id).edit)) return reply.code(403).send({ error: "can't move into a locked or read-only page" });
   }
+  if (b.position !== undefined && b.parent_id === undefined && b.position !== p.position && !can(u, p.workspace_id, 'move')) return reply.code(403).send({ error: 'reordering pages is turned off for your role' });
   db.prepare(`UPDATE pages SET title=?,icon=?,content=?,tags=?,parent_id=?,position=?,is_public=?,cover=?,view=?,status=?,board_cols=?,locked=?,list_cards=?,description=?,col_perm=?,updated_at=datetime('now') WHERE id=?`)
     .run(b.title ?? p.title, b.icon ?? p.icon, b.content ?? p.content,
          b.tags !== undefined ? JSON.stringify(b.tags) : (p.tags ?? '[]'),
@@ -855,9 +915,10 @@ app.put('/api/pages/:id', async (req, reply) => {
   if (b.board_cols !== undefined) logPage(p.id, u.id, '~', 'updated the board');
   return db.prepare('SELECT * FROM pages WHERE id=?').get(p.id);
 });
+const mayDelete = (u, pageId) => { const a = access(u, pageId); if (a.admin) return true; const ws = db.prepare('SELECT workspace_id FROM pages WHERE id=?').get(pageId)?.workspace_id; return !!(a.edit && can(u, ws, 'delete')); };
 app.delete('/api/pages/:id', async (req, reply) => {
   const u = requireUser(req, reply); if (!u) return;
-  if (!access(u, req.params.id).admin) return reply.code(403).send({ error: 'only owner/admin can delete' });
+  if (!mayDelete(u, req.params.id)) return reply.code(403).send({ error: 'only the page creator or a manager can delete this page' });
   const ids = [], stack = [req.params.id];
   while (stack.length) { const c = stack.pop(); ids.push(c); for (const k of db.prepare('SELECT id FROM pages WHERE parent_id=? AND deleted_at IS NULL').all(c)) stack.push(k.id); }
   const upd = db.prepare("UPDATE pages SET deleted_at=datetime('now') WHERE id=?");
@@ -991,7 +1052,7 @@ app.get('/api/workspaces/:id/graph', async (req, reply) => {
   const all = db.prepare('SELECT id,title,icon,content,parent_id,view,tags FROM pages WHERE workspace_id=? AND deleted_at IS NULL').all(req.params.id);
   const pages = all.filter(p => access(u, p.id).view); // include board columns + cards as nodes
   const ids = new Set(pages.map(p => p.id));
-  const nodes = pages.map(p => { let tg = []; try { tg = (JSON.parse(p.tags || '[]') || []).map(t => (typeof t === 'string' ? t : t?.name || '').toLowerCase()).filter(Boolean); } catch {} return { id: p.id, title: p.title, icon: p.icon, tags: tg, root: !p.parent_id }; });
+  const nodes = pages.map(p => { let tg = []; try { tg = (JSON.parse(p.tags || '[]') || []).map(t => (typeof t === 'string' ? t : t?.name || '').toLowerCase()).filter(Boolean); } catch {} return { id: p.id, title: p.title, icon: p.icon, tags: tg, root: !p.parent_id, view: p.view || 'doc' }; });
   const seen = new Set(); const edges = [];
   for (const a of pages) {
     if (a.parent_id && ids.has(a.parent_id)) { const k = a.parent_id + '>' + a.id; if (!seen.has(k)) { seen.add(k); edges.push({ from: a.parent_id, to: a.id, kind: 'tree' }); } }
@@ -1036,6 +1097,257 @@ app.post('/api/upload', async (req, reply) => {
   return { url: '/uploads/' + name, size: buf.length };
 });
 await app.register(fstatic, { root: UPLOAD_DIR, prefix: '/uploads/', decorateReply: false, immutable: true, maxAge: '365d' });
+
+
+// ---- live page content helpers (REST + MCP) ----
+// The Yjs document is the source of truth while a page is open; pages.content is the
+// saved snapshot. Reads prefer the live doc so unsaved keystrokes are visible; writes go
+// to BOTH so open editors update instantly and nothing is lost on reload.
+const roomName = (pageId) => pageId;
+function currentBlocks(p) {
+  const live = collabDocs.get(roomName(p.id));
+  if (live) { try { const b = readBlocks(live.ydoc); if (b) return b; } catch {} }
+  try { const b = JSON.parse(p.content || '[]'); return Array.isArray(b) ? b : []; } catch { return []; }
+}
+function setPageBlocks(p, blocks, userId, { append = false } = {}) {
+  const hasDoc = collabDocs.has(roomName(p.id)) || !!db.prepare('SELECT 1 FROM ydocs WHERE page_id=?').get(roomName(p.id));
+  let next = append ? [...currentBlocks(p), ...blocks] : blocks;
+  if (hasDoc) {
+    // a live/stored Yjs doc exists: write there so open editors update, then mirror it
+    const d = getCollabDoc(roomName(p.id));
+    const live = readBlocks(d.ydoc);
+    if (append && live) writeBlocks(d.ydoc, blocks, { append: true }); else writeBlocks(d.ydoc, next);
+    persistYDoc(roomName(p.id), d.ydoc);
+    next = readBlocks(d.ydoc) || next;
+  }
+  const content = JSON.stringify(next);
+  if (p.content && p.content !== '[]' && p.content !== content) snapshotVersion(p, userId);
+  db.prepare("UPDATE pages SET content=?, updated_at=datetime('now') WHERE id=?").run(content, p.id);
+  logPage(p.id, userId, '~', 'edited');
+  return next;
+}
+const bumpTreeSignal = (wsId, pageId) => { try { const d = collabDocs.get('tree-' + wsId); if (!d) return; const m = d.ydoc.getMap('tree'); d.ydoc.transact(() => { m.set('v', (m.get('v') || 0) + 1); if (pageId) m.set('p:' + pageId, (m.get('p:' + pageId) || 0) + 1); }); } catch {} };
+
+// ---- personal tokens (Claude Code / MCP) ----
+app.get('/api/me/tokens', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  return db.prepare('SELECT id,name,prefix,created_at,last_used_at FROM api_tokens WHERE user_id=? ORDER BY created_at DESC').all(u.id);
+});
+app.post('/api/me/tokens', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  if (u.via === 'token') return reply.code(403).send({ error: 'sign in to the app to create tokens' });
+  const token = 'nb_' + crypto.randomBytes(20).toString('hex');
+  const id = crypto.randomUUID();
+  db.prepare('INSERT INTO api_tokens (id,user_id,name,token_hash,prefix) VALUES (?,?,?,?,?)').run(id, u.id, String(req.body?.name || 'Claude Code').slice(0, 60), tokenHash(token), token.slice(0, 10));
+  return { id, token, name: String(req.body?.name || 'Claude Code').slice(0, 60), mcp_url: (getSetting('app_url') || process.env.APP_URL || '') + '/mcp' };
+});
+app.delete('/api/me/tokens/:id', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  db.prepare('DELETE FROM api_tokens WHERE id=? AND user_id=?').run(req.params.id, u.id);
+  return { ok: true };
+});
+
+// ---- workspace permission policy ----
+app.get('/api/workspaces/:id/policy', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  const role = u.is_admin ? 'manage' : wsRoleOf(u, req.params.id);
+  if (!role) return reply.code(403).send({ error: 'not a member' });
+  const caps = {}; for (const a of ACTIONS) caps[a.key] = can(u, req.params.id, a.key);
+  return { actions: ACTIONS.map(a => ({ key: a.key, label: a.label, desc: a.desc })), policy: wsPolicy(req.params.id), role, can: caps, manage: role === 'manage' };
+});
+app.put('/api/workspaces/:id/policy', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  if (!canManageWs(u, req.params.id)) return reply.code(403).send({ error: 'only managers' });
+  const cur = wsPolicy(req.params.id); const b = req.body?.policy || req.body || {};
+  const next = { read: { ...cur.read }, write: { ...cur.write } };
+  for (const r of ['read', 'write']) for (const a of ACTIONS) if (typeof b?.[r]?.[a.key] === 'boolean') next[r][a.key] = b[r][a.key];
+  db.prepare('UPDATE workspaces SET policy=? WHERE id=?').run(JSON.stringify(next), req.params.id);
+  policyCache.delete(req.params.id);
+  bumpTreeSignal(req.params.id);
+  return { policy: wsPolicy(req.params.id) };
+});
+// pages in a workspace that have their own access rules (grants, locked, published)
+app.get('/api/workspaces/:id/access-overview', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  if (!canManageWs(u, req.params.id)) return reply.code(403).send({ error: 'only managers' });
+  const grants = db.prepare('SELECT a.page_id,a.user_id,a.role,u.name,u.email FROM page_access a JOIN users u ON u.id=a.user_id').all();
+  const byPage = new Map(); for (const g of grants) { (byPage.get(g.page_id) || byPage.set(g.page_id, []).get(g.page_id)).push({ user_id: g.user_id, name: g.name || g.email, role: g.role }); }
+  return db.prepare("SELECT id,title,icon,locked,is_public,view,parent_id FROM pages WHERE workspace_id=? AND deleted_at IS NULL AND view!='column' ORDER BY position,created_at").all(req.params.id)
+    .filter(p => p.locked || p.is_public || byPage.has(p.id))
+    .map(p => ({ id: p.id, title: p.title, icon: p.icon, locked: !!p.locked, is_public: !!p.is_public, view: p.view, grants: byPage.get(p.id) || [] }));
+});
+
+// ---- workspace overview stats ----
+app.get('/api/workspaces/:id/stats', async (req, reply) => {
+  const u = requireUser(req, reply); if (!u) return;
+  if (!u.is_admin && !wsRoleOf(u, req.params.id)) return reply.code(403).send({ error: 'not a member' });
+  const all = db.prepare('SELECT id,title,icon,content,parent_id,view,updated_at,created_at FROM pages WHERE workspace_id=? AND deleted_at IS NULL').all(req.params.id).filter(p => access(u, p.id).view);
+  const ids = new Set(all.map(p => p.id));
+  const columns = new Set(all.filter(p => p.view === 'column').map(p => p.id));
+  const boards = all.filter(p => p.view === 'board');
+  const cards = all.filter(p => p.parent_id && columns.has(p.parent_id));
+  const pages = all.filter(p => p.view !== 'column' && p.view !== 'board' && !(p.parent_id && columns.has(p.parent_id)));
+  let words = 0, links = 0;
+  for (const p of all) { if (p.view === 'column') continue; const t = pageText(p); if (t) words += t.split(/\s+/).filter(Boolean).length; if ((p.content || '').includes('pageLink')) for (const b of all) if (b.id !== p.id && p.content.includes(b.id)) links++; }
+  const recent = all.filter(p => p.view !== 'column').sort((a, b) => (b.updated_at > a.updated_at ? 1 : -1)).slice(0, 8).map(p => ({ id: p.id, title: p.title, icon: p.icon, updated_at: p.updated_at, view: p.view }));
+  const activity = db.prepare(`SELECT l.id,l.page_id,l.user_id,l.act,l.detail,l.created_at,p.title,p.icon FROM page_log l JOIN pages p ON p.id=l.page_id WHERE p.workspace_id=? AND p.deleted_at IS NULL ORDER BY l.created_at DESC LIMIT 40`).all(req.params.id)
+    .filter(l => ids.has(l.page_id)).slice(0, 14).map(l => ({ id: l.id, act: l.act, detail: l.detail, created_at: l.created_at, user: userPub(l.user_id), page: { id: l.page_id, title: l.title, icon: l.icon } }));
+  const members = db.prepare('SELECT COUNT(*) c FROM workspace_member WHERE workspace_id=?').get(req.params.id).c;
+  const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 19).replace('T', ' ');
+  const editedThisWeek = all.filter(p => p.view !== 'column' && p.updated_at > weekAgo).length;
+  return { pages: pages.length, boards: boards.length, cards: cards.length, words, links, members, editedThisWeek, recent, activity };
+});
+
+// ---- Claude Code (MCP) ----
+const ops = {
+  wsOrFirst(u, wsId) { const list = ops.listWorkspaces(u); const w = wsId ? list.find(x => x.id === wsId) : list[0]; if (!w) throw new Error(wsId ? 'No access to that workspace' : 'No workspaces'); return w; },
+  listWorkspaces(u) {
+    const rows = u.is_admin ? db.prepare('SELECT id,name,icon FROM workspaces ORDER BY position,created_at').all().map(w => ({ ...w, role: 'manage' }))
+      : db.prepare('SELECT w.id,w.name,w.icon,m.role FROM workspaces w JOIN workspace_member m ON m.workspace_id=w.id WHERE m.user_id=? ORDER BY w.position,w.created_at').all(u.id);
+    return rows.filter(w => can(u, w.id, 'api'));
+  },
+  pagesOf(u, wsId) { return db.prepare('SELECT id,parent_id,title,icon,view,position,updated_at FROM pages WHERE workspace_id=? AND deleted_at IS NULL ORDER BY position,created_at').all(wsId).filter(p => access(u, p.id).view); },
+  outline(u, wsId) {
+    const w = ops.wsOrFirst(u, wsId); const pages = ops.pagesOf(u, w.id); const ids = new Set(pages.map(p => p.id));
+    const kids = {}; for (const p of pages) { const par = p.parent_id && ids.has(p.parent_id) ? p.parent_id : '__root'; (kids[par] ||= []).push(p); }
+    const lines = [`Workspace: ${w.name} (id: ${w.id})`];
+    const walk = (par, d) => { for (const p of kids[par] || []) { const kind = p.view === 'board' ? ' [board]' : p.view === 'column' ? ' [column]' : ''; lines.push('  '.repeat(d) + '- ' + (p.title || 'Untitled') + kind + '  (id: ' + p.id + ')'); walk(p.id, d + 1); } };
+    walk('__root', 0);
+    return lines.length > 1 ? lines.join('\n') : lines[0] + '\n(no pages yet)';
+  },
+  search(u, q, wsId) {
+    const query = String(q || '').toLowerCase().trim(); if (!query) return [];
+    const words = query.split(/\s+/).filter(Boolean); const hits = [];
+    const titles = new Map(db.prepare('SELECT id,title FROM pages WHERE deleted_at IS NULL').all().map(r => [r.id, r.title]));
+    const wsIds = new Set(ops.listWorkspaces(u).map(w => w.id));
+    for (const p of db.prepare('SELECT id,title,icon,content,workspace_id,parent_id,updated_at,view FROM pages WHERE deleted_at IS NULL' + (wsId ? ' AND workspace_id=?' : '') + ' ORDER BY updated_at DESC').all(...(wsId ? [wsId] : []))) {
+      if (p.view === 'column' || !wsIds.has(p.workspace_id)) continue;
+      const title = (p.title || 'Untitled').toLowerCase(); let score = 0;
+      if (title === query) score += 100; else if (title.startsWith(query)) score += 60; else if (title.includes(query)) score += 40; else if (words.every(w => title.includes(w))) score += 25;
+      const text = pageText(p).toLowerCase();
+      if (!score) { if (text.includes(query)) score += 15; else if (words.every(w => text.includes(w))) score += 8; }
+      if (!score || !access(u, p.id).view) continue;
+      const i = text.indexOf(query) >= 0 ? text.indexOf(query) : text.indexOf(words[0]);
+      const raw = pageText(p); const snippet = i >= 0 ? (i > 50 ? '…' : '') + raw.slice(Math.max(0, i - 50), i + query.length + 90) + '…' : null;
+      hits.push({ id: p.id, title: p.title, score, snippet, parent: p.parent_id ? titles.get(p.parent_id) || null : null, updated_at: p.updated_at });
+      if (hits.length >= 40) break;
+    }
+    return hits.sort((a, b) => b.score - a.score || (b.updated_at > a.updated_at ? 1 : -1)).slice(0, 20);
+  },
+  pageOr404(u, id, need = 'view') {
+    const p = db.prepare('SELECT * FROM pages WHERE id=? AND deleted_at IS NULL').get(id); if (!p) throw new Error('Page not found: ' + id);
+    const a = access(u, p.id); if (!a.view) throw new Error('No access to that page'); if (need === 'edit' && !a.edit) throw new Error('You can only read that page'); return p;
+  },
+  readMarkdown(u, id) {
+    const p = ops.pageOr404(u, id);
+    let tags = []; try { tags = (JSON.parse(p.tags || '[]') || []).map(t => (typeof t === 'string' ? t : t?.name)).filter(Boolean); } catch {}
+    const head = [`# ${p.title || 'Untitled'}`, `id: ${p.id}${p.parent_id ? '  parent: ' + p.parent_id : ''}${tags.length ? '  tags: ' + tags.join(', ') : ''}${p.is_public ? '  published' : ''}${p.locked ? '  locked' : ''}`, ''];
+    if (p.view === 'board') {
+      const cols = db.prepare("SELECT id,title,icon FROM pages WHERE parent_id=? AND view='column' AND deleted_at IS NULL ORDER BY position").all(p.id);
+      const out = [...head, p.description ? p.description + '\n' : '', 'Board columns and cards:'];
+      for (const c of cols) { out.push(`\n## ${c.title}  (column id: ${c.id})`); for (const card of db.prepare('SELECT id,title FROM pages WHERE parent_id=? AND deleted_at IS NULL ORDER BY position').all(c.id)) if (access(u, card.id).view) out.push(`- ${card.title || 'Untitled'}  (id: ${card.id})`); }
+      return out.join('\n');
+    }
+    const subs = db.prepare("SELECT id,title FROM pages WHERE parent_id=? AND deleted_at IS NULL AND view!='column' ORDER BY position").all(p.id).filter(s => access(u, s.id).view);
+    return head.join('\n') + blocksToMarkdown(currentBlocks(p)) + (subs.length ? '\nSub-pages:\n' + subs.map(s => `- ${s.title || 'Untitled'}  (id: ${s.id})`).join('\n') + '\n' : '');
+  },
+  createPage(u, a) {
+    const parent = a.parent_id ? ops.pageOr404(u, a.parent_id) : null;
+    const w = ops.wsOrFirst(u, parent ? parent.workspace_id : a.workspace_id);
+    const wsId = w.id;
+    let mayAdd;
+    if (!parent) mayAdd = can(u, wsId, 'create');
+    else if (parent.view === 'column') mayAdd = canManageWs(u, wsId) || (can(u, wsId, 'cards') && parent.col_perm !== 'manager' && access(u, parent.id).edit);
+    else mayAdd = canManageWs(u, wsId) || (can(u, wsId, 'subpage') && access(u, parent.id).edit);
+    if (!mayAdd) throw new Error(parent ? 'No permission to add a page there' : 'Only managers can create top-level pages in this workspace');
+    const id = crypto.randomUUID();
+    const pos = (db.prepare('SELECT MAX(position) m FROM pages WHERE parent_id IS ? AND workspace_id=?').get(parent ? parent.id : null, wsId)?.m || 0) + 1;
+    const blocks = a.markdown ? markdownToBlocks(a.markdown) : [];
+    const tags = Array.isArray(a.tags) ? a.tags.filter(t => typeof t === 'string' && t.trim()).map(t => ({ name: t.trim() })) : [];
+    db.prepare('INSERT INTO pages (id,parent_id,owner_id,workspace_id,title,icon,position,content,tags) VALUES (?,?,?,?,?,?,?,?,?)').run(id, parent ? parent.id : null, u.id, wsId, String(a.title || 'Untitled').slice(0, 300), a.icon ? String(a.icon).slice(0, 64) : '📄', pos, JSON.stringify(blocks), JSON.stringify(tags));
+    logPage(id, u.id, '+', 'created this page');
+    if (parent) logPage(parent.id, u.id, '+', `added "${String(a.title || 'Untitled').slice(0, 60)}"`);
+    bumpTreeSignal(wsId);
+    return db.prepare('SELECT id,title,parent_id FROM pages WHERE id=?').get(id);
+  },
+  updatePage(u, a) {
+    const p = ops.pageOr404(u, a.page_id, 'edit');
+    if (p.view === 'column') throw new Error('Columns are renamed through the board');
+    if (typeof a.markdown === 'string') { if (p.view === 'board') throw new Error('Boards have no body; edit the cards instead'); setPageBlocks(p, markdownToBlocks(a.markdown), u.id, { append: !!a.append }); }
+    const title = a.title !== undefined ? String(a.title).slice(0, 300) : p.title;
+    const icon = a.icon !== undefined ? String(a.icon).slice(0, 64) : p.icon;
+    const tags = Array.isArray(a.tags) ? JSON.stringify(a.tags.filter(t => typeof t === 'string' && t.trim()).map(t => ({ name: t.trim() }))) : p.tags;
+    db.prepare("UPDATE pages SET title=?, icon=?, tags=?, updated_at=datetime('now') WHERE id=?").run(title, icon, tags, p.id);
+    if (title !== p.title) logPage(p.id, u.id, '~', `renamed to "${title.slice(0, 60) || 'Untitled'}"`);
+    if (Array.isArray(a.tags)) logPage(p.id, u.id, '~', 'updated tags');
+    bumpTreeSignal(p.workspace_id, p.id);
+    return { id: p.id, title };
+  },
+  movePage(u, a) {
+    const p = ops.pageOr404(u, a.page_id, 'edit');
+    const parent = a.parent_id ? ops.pageOr404(u, a.parent_id) : null;
+    if (parent && parent.workspace_id !== p.workspace_id) throw new Error('Pages cannot move between workspaces');
+    if (parent) { let cur = parent; let g = 0; while (cur && g++ < 100) { if (cur.id === p.id) throw new Error('Cannot move a page under itself'); cur = cur.parent_id ? db.prepare('SELECT id,parent_id FROM pages WHERE id=?').get(cur.parent_id) : null; } }
+    const src = p.parent_id ? db.prepare('SELECT view,col_perm FROM pages WHERE id=?').get(p.parent_id) : null;
+    const cardMove = parent?.view === 'column' || src?.view === 'column';
+    if (!can(u, p.workspace_id, cardMove ? 'cards' : 'move')) throw new Error('Moving is turned off for your role');
+    if (((parent?.view === 'column' && parent.col_perm === 'manager') || (src?.view === 'column' && src.col_perm === 'manager')) && !canManageWs(u, p.workspace_id)) throw new Error('Only managers can move cards in or out of that column');
+    if (parent && parent.view !== 'column' && !(canManageWs(u, p.workspace_id) || access(u, parent.id).edit)) throw new Error('Cannot move into a locked or read-only page');
+    if (!parent && !can(u, p.workspace_id, 'create')) throw new Error('Only managers can place pages at the top level');
+    const sibs = db.prepare('SELECT id,position FROM pages WHERE parent_id IS ? AND workspace_id=? AND deleted_at IS NULL AND id!=? ORDER BY position,created_at').all(parent ? parent.id : null, p.workspace_id, p.id);
+    let position;
+    const pos = String(a.position || 'last');
+    if (pos === 'first') position = (sibs[0]?.position ?? 1) - 1;
+    else if (pos.startsWith('after:')) { const i = sibs.findIndex(s => s.id === pos.slice(6)); if (i < 0) throw new Error('Sibling not found'); position = ((sibs[i].position || 0) + (sibs[i + 1]?.position ?? (sibs[i].position || 0) + 2)) / 2; }
+    else position = (sibs.length ? (sibs[sibs.length - 1].position || 0) : 0) + 1;
+    db.prepare("UPDATE pages SET parent_id=?, position=?, updated_at=datetime('now') WHERE id=?").run(parent ? parent.id : null, position, p.id);
+    logPage(p.id, u.id, '~', cardMove ? 'moved card' : 'moved');
+    bumpTreeSignal(p.workspace_id);
+    return { id: p.id, title: p.title, parent_id: parent ? parent.id : null };
+  },
+  deletePage(u, id) {
+    const p = ops.pageOr404(u, id);
+    if (!mayDelete(u, p.id)) throw new Error('Only the page creator or a manager can delete this page');
+    const ids = [], stack = [p.id];
+    while (stack.length) { const c = stack.pop(); ids.push(c); for (const k of db.prepare('SELECT id FROM pages WHERE parent_id=? AND deleted_at IS NULL').all(c)) stack.push(k.id); }
+    const upd = db.prepare("UPDATE pages SET deleted_at=datetime('now') WHERE id=?");
+    db.transaction(() => ids.forEach(i => upd.run(i)))();
+    logPage(p.id, u.id, '-', 'moved to trash');
+    bumpTreeSignal(p.workspace_id);
+    return { trashed: ids.length };
+  },
+  createBoard(u, a) {
+    const w = ops.wsOrFirst(u, a.workspace_id);
+    if (!can(u, w.id, 'create')) throw new Error('Only managers can create boards in this workspace');
+    const id = crypto.randomUUID();
+    const pos = (db.prepare('SELECT MAX(position) m FROM pages WHERE parent_id IS NULL AND workspace_id=?').get(w.id)?.m || 0) + 1;
+    db.prepare("INSERT INTO pages (id,parent_id,owner_id,workspace_id,title,icon,position,content,view) VALUES (?,?,?,?,?,?,?,?,'board')").run(id, null, u.id, w.id, String(a.title || 'Untitled').slice(0, 300), 'ph:SquaresFour', pos, '[]');
+    const names = Array.isArray(a.columns) && a.columns.length ? a.columns.map(c => String(c).slice(0, 80)) : ['To do', 'In progress', 'Done'];
+    const colors = ['gray', 'blue', 'green', 'amber', 'purple', 'pink', 'red'];
+    const columns = names.map((name, i) => { const cid = crypto.randomUUID(); db.prepare("INSERT INTO pages (id,parent_id,owner_id,workspace_id,title,icon,view,col_perm,position,content) VALUES (?,?,?,?,?,?,'column','member',?,?)").run(cid, id, u.id, w.id, name, 'dot:' + colors[i % colors.length], i, '[]'); return { id: cid, title: name }; });
+    logPage(id, u.id, '+', 'created this board');
+    bumpTreeSignal(w.id);
+    return { id, title: a.title || 'Untitled', columns };
+  },
+  addComment(u, id, body) {
+    const p = ops.pageOr404(u, id);
+    const text = String(body || '').trim(); if (!text) throw new Error('Empty comment');
+    if (!can(u, p.workspace_id, 'comment')) throw new Error('Commenting is turned off for your role');
+    const cid = crypto.randomUUID();
+    db.prepare('INSERT INTO comments (id,page_id,user_id,body,mentions) VALUES (?,?,?,?,?)').run(cid, p.id, u.id, text, '[]');
+    if (p.owner_id && p.owner_id !== u.id) db.prepare('INSERT INTO notifications (id,user_id,actor_id,type,page_id,comment_id,body) VALUES (?,?,?,?,?,?,?)').run(crypto.randomUUID(), p.owner_id, u.id, 'comment', p.id, cid, text.slice(0, 160));
+    logPage(p.id, u.id, '+', 'commented');
+    return { ok: true };
+  },
+};
+const mcp = makeMcp({ ops, version: VERSION });
+for (const route of ['/mcp', '/api/mcp']) {
+  app.route({ method: ['GET', 'POST', 'DELETE'], url: route, handler: async (req, reply) => {
+    const u = userFromReq(req);
+    if (!u) return reply.code(401).header('WWW-Authenticate', 'Bearer realm="notebit"').send({ error: 'Send a personal token: Authorization: Bearer nb_... (Settings > Claude Code)' });
+    return mcp(req, reply, u);
+  } });
+}
 
 // ---- serve frontend ----
 if (fs.existsSync(WEB_DIR)) {

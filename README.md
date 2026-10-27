@@ -3,13 +3,13 @@
 ![NoteBit](docs/banner.png)
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-a78bdb.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.3.0-a78bdb.svg)](https://github.com/GroyalCodes/notebit/releases)
+[![Version](https://img.shields.io/badge/version-1.4.0-a78bdb.svg)](https://github.com/GroyalCodes/notebit/releases)
 [![Self-hostable](https://img.shields.io/badge/self--hostable-yes-5fc18a.svg)](#self-host)
 [![Stars](https://img.shields.io/github/stars/GroyalCodes/notebit?color=a78bdb)](https://github.com/GroyalCodes/notebit/stargazers)
 
-**A clean, self-hostable workspace for docs, boards, and team knowledge.**
+**A clean, self-hostable workspace for pages, boards, and team knowledge.**
 
-Real-time collaboration, Kanban boards, a knowledge graph, per-page permissions, and web publishing. Your data, your server, no seat limits.
+Real-time collaboration with live cursors, Kanban boards, a map of how pages connect, Claude Code built in, permissions you can read at a glance, and web publishing. Your data, your server, no seat limits.
 
 [Website](https://notebit.org) · [Self-host](#self-host) · [Cloud](https://notebit.org#pricing) · [Releases](https://github.com/GroyalCodes/notebit/releases)
 
@@ -24,8 +24,10 @@ Notes apps got bloated and pricey. NoteBit is neither.
 - **Truly self-hostable**: one container, one SQLite file (plus an `uploads` folder for images). No external services required.
 - **No seat tax**: invite your whole team; the self-hosted version is never seat-capped.
 - **A proper editor**: slash commands, callouts, toggles, to-dos, tables, code, images, drag-and-drop with a real drop indicator, one block menu (handle click or right-click), Markdown paste, browser spellcheck.
-- **Everything is a connected page**: docs, board columns, and cards are all pages, visualised in an interactive **knowledge graph**; every page has a link (`/page/<id>`), backlinks, favorites and a version history.
-- **Real-time collaboration**: Google-Docs-style multiplayer cursors out of the box, comments with @mentions, an inbox.
+- **Everything is a connected page**: pages, board columns, and cards are all pages, drawn on a zoomable **Map**; every page has a link (`/page/<id>`), backlinks, favorites and a version history.
+- **Real-time collaboration**: multiplayer text cursors and live pointers out of the box, comments with @mentions, an inbox.
+- **Claude Code built in**: one command connects Claude Code over MCP; it can read, search, create, edit and move pages and cards, as you, with your permissions.
+- **Permissions you can understand**: a role-by-action grid (what Read, Write and Manage members may do, each toggleable) plus per-page access, locking and publishing.
 - **Kanban that fits**: columns and cards are first-class pages with per-column permissions and an approval workflow.
 - **Search that finds things**: ⌘K searches titles and text with snippets and recents.
 - **Multiple workspaces**: one per team or project, each with its own members and settings.
@@ -118,6 +120,16 @@ location / {
 
 Then set `APP_URL: "https://notes.yourdomain.com"` in `docker-compose.yml` and restart. A [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) pointed at `localhost:8200` also works well if you cannot open ports.
 
+## Claude Code
+
+NoteBit speaks [MCP](https://modelcontextprotocol.io) at `/mcp`. In the app, open **Settings > Claude Code**, create a token, and run the command it shows:
+
+```bash
+claude mcp add --transport http notebit https://notes.yourdomain.com/mcp --header "Authorization: Bearer nb_..."
+```
+
+Then ask Claude Code to list, search, read, write, append to, move or delete pages, create boards and cards, or leave comments. Edits land in the live document, so anyone with the page open sees them immediately. Tokens act as the user who created them; a workspace manager can switch the "Connect Claude Code" action off per role in **Settings > Permissions**. Any page is also available as Markdown at `GET /api/pages/<id>?format=md` with the same token.
+
 ## Don't want to host it?
 
 [**NoteBit Cloud**](https://notebit.org#pricing) is the managed option: we host, back up, and update it for one flat price per workspace, with unlimited members. No per-seat bill.
@@ -137,7 +149,7 @@ Node 22 · Fastify 5 · better-sqlite3 · React 18 · Vite 6 · BlockNote 0.25 �
 
 `web/package.json` pins `prosemirror-model` to 1.25.0 (via `overrides`): 1.25.1 changed how the parser places nodes that do not fit their context, which BlockNote 0.25's paste rules were not written for (pasted blocks came out nested under empty copies). Remove the pin when moving to a newer BlockNote.
 
-Frontend layout: `web/src/ui.jsx` (shared primitives), `blocks.jsx` (editor schema and custom blocks), `editor.jsx` (the page editor), `App.jsx` (everything else). See `CHANGELOG.md` for what changed in each release.
+Frontend layout: `web/src/ui.jsx` (shared primitives), `blocks.jsx` (editor schema and custom blocks), `editor.jsx` (the page editor), `home.jsx` (Overview and Map), `settings-extra.jsx` (Permissions, Claude Code, editor preferences), `App.jsx` (everything else). Server: `server/server.js` (API, collab, permissions), `md.js` (Markdown conversion), `ycontent.js` (writes blocks into live Yjs docs), `mcp.js` (the MCP endpoint). See `CHANGELOG.md` for what changed in each release.
 
 ## License
 
