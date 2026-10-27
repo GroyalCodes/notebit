@@ -2,7 +2,8 @@
 // Obsidian-style force graph on a canvas: zoom, pan, drag nodes, search, filters.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import api from './api.js';
-import { PageIcon, BoardGlyph, Avatar, tagColor, fmtWhen } from './ui.jsx';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { PageIcon, BoardGlyph, Avatar, tagColor, fmtWhen, PH, GI } from './ui.jsx';
 import { PencilSimple as Pencil, MagnifyingGlass, Plus, Minus, ArrowsOut, Star, Graph as GraphIcon, ClockCounterClockwise, Users } from '@phosphor-icons/react';
 
 // ---------- Overview ----------
@@ -59,6 +60,24 @@ export function Overview({ workspace, pages, members, favs, canCreate, onOpen, o
 
 // ---------- Map (canvas force graph) ----------
 const isEmoji = (icon) => !!icon && !/^(ph|gi|dot|li):/.test(icon);
+// Phosphor / Game Icons are React components; the canvas needs bitmaps. Render each one
+// to SVG markup once per color, load it as an image and cache it. The paint loop picks
+// it up on the next frame once loaded.
+const iconCache = new Map();
+function iconImage(icon, fallbackColor, force = false) {
+  const [set, name, ownColor] = String(icon).split(':');
+  const color = force ? fallbackColor : (ownColor || fallbackColor);
+  const key = icon + '|' + color;
+  const hit = iconCache.get(key); if (hit) return hit.img.complete && hit.img.naturalWidth ? hit.img : null;
+  const Comp = set === 'ph' ? PH[name] : set === 'gi' ? GI[name] : null;
+  if (!Comp) return null;
+  let svg; try { svg = renderToStaticMarkup(set === 'ph' ? <Comp size={64} weight="fill" color={color} /> : <Comp size={64} color={color} />); } catch { return null; }
+  if (!/^<svg/.test(svg)) return null;
+  if (!/xmlns=/.test(svg)) svg = svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+  const img = new Image(); img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  iconCache.set(key, { img });
+  return null;
+}
 const cssVar = (name, fb) => { try { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fb; } catch { return fb; } };
 const mix = (hex, alpha) => { const h = hex.replace('#', ''); const n = h.length === 3 ? h.split('').map(c => c + c).join('') : h; const r = parseInt(n.slice(0, 2), 16), g = parseInt(n.slice(2, 4), 16), b = parseInt(n.slice(4, 6), 16); return `rgba(${r},${g},${b},${alpha})`; };
 
@@ -293,8 +312,10 @@ function paint(st, cv) {
     ctx.beginPath(); ctx.arc(nd.x, nd.y, nd.r, 0, Math.PI * 2);
     ctx.fillStyle = hov && hov.id === nd.id ? C.accent : mix(col, nd.root || nd.kind === 'board' ? .9 : .75); ctx.fill();
     if (nd.root || nd.kind === 'board') { ctx.lineWidth = 1.5 / k; ctx.strokeStyle = mix(C.accent, .35); ctx.beginPath(); ctx.arc(nd.x, nd.y, nd.r + 3 / k, 0, Math.PI * 2); ctx.stroke(); }
-    const showIcon = isEmoji(nd.icon) && nd.r * k >= 11;
-    if (showIcon) { ctx.font = `${nd.r * 1.25}px ui-sans-serif, system-ui, "Apple Color Emoji", "Segoe UI Emoji"`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(nd.icon, nd.x, nd.y + nd.r * 0.08); }
+    if (nd.r * k >= 11 && nd.icon && nd.icon !== '📄') {
+      if (isEmoji(nd.icon)) { ctx.font = `${nd.r * 1.25}px ui-sans-serif, system-ui, "Apple Color Emoji", "Segoe UI Emoji"`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(nd.icon, nd.x, nd.y + nd.r * 0.08); }
+      else if (/^(ph|gi):/.test(nd.icon)) { const img = iconImage(nd.icon, C.bg, nd.root || nd.kind === 'board'); if (img) { const sz = nd.r * 1.25; ctx.drawImage(img, nd.x - sz / 2, nd.y - sz / 2, sz, sz); } }
+    }
     const showLabel = (hov && (hov.id === nd.id || nb.has(nd.id))) || (q && f) || nd.root || nd.kind === 'board' || nd.r * k >= 7.5 || k >= 1.25;
     if (showLabel) {
       const label = (nd.title || 'Untitled').length > 28 ? (nd.title || 'Untitled').slice(0, 27) + '…' : (nd.title || 'Untitled');

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.2 (2026-10-27)
+
+- **Map shows every page icon.** Phosphor and Game Icons page icons (with or without a custom color) are drawn on the map, not just emoji. Hub nodes draw them in a contrasting tone so colored icons stay visible on the accent fill.
+
 ## 1.4.1 (2026-10-27)
 
 - **Pages drag onto boards again.** 1.4.0 stopped sidebar drags from landing on board columns. Dropping a page on a column row in the sidebar makes it a card, dropping it on the board row files it into the first column, and you can now drag a page from the sidebar straight onto a column (or above a specific card) of the board that is open.
