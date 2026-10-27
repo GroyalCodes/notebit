@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.1 (2026-10-27)
+
+- **Pages drag onto boards again.** 1.4.0 stopped sidebar drags from landing on board columns. Dropping a page on a column row in the sidebar makes it a card, dropping it on the board row files it into the first column, and you can now drag a page from the sidebar straight onto a column (or above a specific card) of the board that is open.
+- The release workflow builds the public multi-arch container image on every tag.
+
 ## 1.4.0 (2026-10-27)
 
 A quality-of-life release: a bigger, calmer sidebar, a real map, live pointers, Claude Code built in, and permissions you can read at a glance. Data format is unchanged; update as usual.

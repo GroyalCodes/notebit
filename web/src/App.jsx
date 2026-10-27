@@ -128,6 +128,8 @@ function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, onCon
   const canManageRef = useRef(canManage); canManageRef.current = canManage;
   const capsRef = useRef(caps); capsRef.current = caps;
   const expandTimer = useRef(null);
+  const extRef = useRef(null); // board column/card in the main area currently marked as the drop target
+  const markExt = (el, cls) => { const prev = extRef.current; if (prev && (prev.el !== el || prev.cls !== cls)) prev.el.classList.remove(prev.cls); if (el) { el.classList.add(cls); extRef.current = { el, cls }; } else extRef.current = null; };
 
   const byParent = useMemo(() => {
     const ids = new Set(pages.map(p => p.id));
@@ -155,6 +157,17 @@ function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, onCon
       const sc = document.querySelector('.tree-scroll');
       if (sc) { const r = sc.getBoundingClientRect(); if (e.clientY < r.top + 48) sc.scrollTop -= 8; else if (e.clientY > r.bottom - 48) sc.scrollTop += 8; }
       const under = document.elementFromPoint(e.clientX, e.clientY);
+      // over the open board in the main area: drop into a column, or above a specific card
+      const cardEl = under?.closest?.('.bcard'), colEl = under?.closest?.('.bcol');
+      if (colEl && colEl.dataset.flip) {
+        const colId = colEl.dataset.flip; const cardId = cardEl?.dataset.flip;
+        if (colId !== d.id && cardId !== d.id && !isDescendant(d.id, colId)) {
+          if (cardId) { markExt(cardEl, 'drop-above'); setOv({ id: cardId, zone: 'before' }); }
+          else { markExt(colEl, 'over'); setOv({ id: colId, zone: 'inside' }); }
+          return;
+        }
+      }
+      markExt(null);
       if (under?.closest?.('.tree-root-zone')) { setOv({ id: '__root', zone: 'root' }); clearTimeout(expandTimer.current); expandTimer.current = null; return; }
       const row = under?.closest?.('.tree-row');
       const id = row?.getAttribute?.('data-id');
@@ -162,18 +175,25 @@ function Tree({ pages, currentId, onOpen, onNew, onDelete, onMove, onLink, onCon
         const r = row.getBoundingClientRect(); const y = (e.clientY - r.top) / r.height;
         let zone = y < 0.3 ? 'before' : y > 0.7 ? 'after' : 'inside';
         const tgt = pagesRef.current.find(pp => pp.id === id);
-        if (zone === 'inside' && ((tgt?.locked && !canManageRef.current) || tgt?.view === 'column')) zone = y < 0.5 ? 'before' : 'after'; // no nesting into locked sections or columns
-        const prev = overRef.current;
-        if (!prev || prev.id !== id || prev.zone !== zone) {
-          clearTimeout(expandTimer.current); expandTimer.current = null;
-          if (zone === 'inside') expandTimer.current = setTimeout(() => expand(id), 550); // hover to open a collapsed section
+        let overId = id;
+        if (tgt?.view === 'column') zone = 'inside';                     // a column row is one big drop target: the page becomes a card
+        else if (tgt?.view === 'board' && zone === 'inside') {          // dropping onto the board itself files it into the first column
+          const col = pagesRef.current.filter(pp => pp.parent_id === tgt.id && pp.view === 'column').sort((a, b) => (a.position || 0) - (b.position || 0))[0];
+          if (col) overId = col.id;
         }
-        setOv({ id, zone });
+        if (zone === 'inside' && tgt?.locked && !canManageRef.current) zone = y < 0.5 ? 'before' : 'after'; // can't nest into a locked section
+        const prev = overRef.current;
+        if (!prev || prev.id !== overId || prev.zone !== zone) {
+          clearTimeout(expandTimer.current); expandTimer.current = null;
+          if (zone === 'inside') expandTimer.current = setTimeout(() => { expand(id); if (overId !== id) expand(overId); }, 550); // hover to open a collapsed section
+        }
+        setOv({ id: overId, zone });
       } else { setOv(null); clearTimeout(expandTimer.current); expandTimer.current = null; }
     };
     const mu = (e) => {
       const d = di.current, o = overRef.current;
       clearTimeout(expandTimer.current); expandTimer.current = null;
+      markExt(null);
       if (d?.active) {
         draggedRef.current = true; setTimeout(() => { draggedRef.current = false; }, 60);
         if (o) { onMoveRef.current(d.id, o.zone === 'root' ? null : o.id, o.zone); if (o.zone === 'inside') expand(o.id); }
